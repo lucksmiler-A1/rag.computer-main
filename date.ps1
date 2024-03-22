@@ -1,5 +1,5 @@
 $dates = @()
-$date = [datetime]"2014-03-22"
+$date = [datetime]"2024-03-22"
 
 while ($date -le [datetime]"2024-09-29") {
 
