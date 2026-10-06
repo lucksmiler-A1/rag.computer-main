@@ -1,0 +1,24 @@
+{
+  "title": "API Reference",
+  "pages": [
+    "authentication",
+    "users",
+    "api-keys",
+    "audit",
+    "status",
+    "instance-settings",
+    "collections",
+    "documents",
+    "connectors",
+    "chat",
+    "query",
+    "vectors",
+    "embedding-presets",
+    "mcp-servers",
+    "webhooks",
+    "usage",
+    "evaluation",
+    "preferences",
+    "health"
+  ]
+}

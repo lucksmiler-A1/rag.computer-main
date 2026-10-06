@@ -1,0 +1,152 @@
+---
+title: Vectors
+description: Direct Turbopuffer-backed vector operations.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+Direct vector operations for custom embeddings or external embedding services, bypassing the document ingestion pipeline.
+
+Scoped API keys need `vector:write` for upsert and `vector:delete` for delete. `collection:write` no longer grants raw vector mutation.
+
+<Accordions type="multiple">
+
+<Accordion title="GET /v1/admin/vector-storage/overview — Admin storage overview">
+
+Session-only. Returns Turbopuffer health plus collection and vector totals for admin diagnostics.
+
+```
+GET /v1/admin/vector-storage/overview
+```
+
+**Response** `200`:
+
+```json
+{
+  "provider_health": {
+    "name": "turbopuffer",
+    "configured": true,
+    "status": "ok",
+    "error": null
+  },
+  "collections": [
+    {
+      "name": "docs",
+      "documents": 12,
+      "chunks": 480,
+      "bytes": 1048576
+    }
+  ],
+  "totals": { "collections": 1, "documents": 12, "chunks": 480, "bytes": 1048576 }
+}
+```
+
+</Accordion>
+
+<Accordion title="POST /v1/collections/{collection_name}/vectors/upsert — Upsert vectors">
+
+Insert or update vectors directly in the collection's Turbopuffer namespace.
+
+```
+POST /v1/collections/{collection_name}/vectors/upsert
+```
+
+**Request body:**
+
+```json
+{
+  "vectors": [
+    {
+      "id": "custom_001",
+      "embedding": [0.1, 0.2, 0.3],
+      "text": "Custom text content",
+      "metadata": { "source": "external" }
+    }
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `vectors` | array | yes | List of vector entries |
+| `vectors[].id` | string | yes | Unique vector ID |
+| `vectors[].embedding` | array[float] | yes | Must match collection dimension |
+| `vectors[].text` | string | no | Associated text content |
+| `vectors[].metadata` | object | no | Arbitrary metadata |
+
+If the collection was created with `tenant_field`, each vector's metadata must include that field.
+
+Default request safety caps reject requests above 1,000 vectors per upsert, 100,000 text characters per vector, or 65,536 JSON metadata bytes per vector. Admins can tune these in instance settings.
+
+**Response** `200`:
+
+```json
+{ "status": "ok", "upserted": 1 }
+```
+
+**Errors:**
+
+- `400` — Dimension mismatch, invalid vectors, or missing tenant metadata
+- `409` — Existing Turbopuffer namespace uses a different vector dimension than the collection
+- `413` — Too many vectors, too much vector text, or too much vector metadata
+- `404` — Collection not found
+
+</Accordion>
+
+<Accordion title="POST /v1/collections/{collection_name}/vectors/delete — Delete vectors">
+
+Delete vectors by their IDs.
+
+```
+POST /v1/collections/{collection_name}/vectors/delete
+```
+
+The default request safety cap rejects requests above 10,000 IDs per delete. Admins can tune this in instance settings.
+
+**Request body:**
+
+```json
+{ "ids": ["custom_001", "custom_002"] }
+```
+
+**Response** `200`:
+
+```json
+{ "status": "ok", "deleted": 2 }
+```
+
+**Errors:** `404` — Collection not found
+
+</Accordion>
+
+</Accordions>
+
+## Example: Custom Embeddings
+
+```bash
+# Upsert vectors with your own embeddings
+curl -X POST http://localhost:4000/v1/collections/custom/vectors/upsert \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vectors": [
+      {
+        "id": "vec_001",
+        "embedding": [0.1, 0.2, 0.3],
+        "text": "Custom content",
+        "metadata": {"source": "external"}
+      }
+    ]
+  }'
+
+# Delete vectors
+curl -X POST http://localhost:4000/v1/collections/custom/vectors/delete \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"ids": ["vec_001"]}'
+```
+
+<Callout type="warn">
+  The embedding dimension must match the collection's configured dimension. Request vectors with the wrong dimension return `400`; an existing Turbopuffer namespace with a different dimension returns `409`.
+</Callout>

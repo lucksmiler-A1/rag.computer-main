@@ -1,0 +1,71 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api";
+import { errorToast } from "@/lib/mutation-toast";
+import { queryKeys } from "@/lib/query-keys";
+import type { ApiKey, CreatedApiKey } from "@/types/bigrag";
+import type { Paginated } from "@/types/pagination";
+
+const KEY = queryKeys.apiKeys();
+
+export const useApiKeys = () =>
+  useQuery({
+    queryKey: KEY,
+    queryFn: () => apiClient.get<Paginated<"keys", ApiKey>>("v1/admin/api-keys"),
+  });
+
+type ApiKeyMutationBody = {
+  name: string;
+  expires_at?: string | null;
+  collection?: string | null;
+  scopes?: string[] | null;
+};
+
+export const useCreateApiKey = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ApiKeyMutationBody) =>
+      apiClient.post<CreatedApiKey>("v1/admin/api-keys", body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+    onError: errorToast("Failed to create"),
+  });
+};
+
+export const useUpdateApiKey = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...body
+    }: {
+      id: string;
+      name?: string;
+      active?: boolean;
+      collection?: string | null;
+      expires_at?: string | null;
+      scopes?: string[] | null;
+    }) => apiClient.patch<ApiKey>(`v1/admin/api-keys/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+    onError: errorToast("Failed to update key"),
+  });
+};
+
+export const useRotateApiKey = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.post<CreatedApiKey>(`v1/admin/api-keys/${id}/rotate`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+    onError: errorToast("Failed to rotate key"),
+  });
+};
+
+export const useDeleteApiKey = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete<{ status: string }>(`v1/admin/api-keys/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEY });
+      toast.success("Key revoked");
+    },
+  });
+};

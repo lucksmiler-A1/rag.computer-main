@@ -1,0 +1,157 @@
+---
+title: Webhooks
+description: API endpoints for managing webhook registrations.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+Base path: `/v1/admin/webhooks`
+
+Session-only admin endpoints. API-key bearer tokens are rejected.
+
+## Management
+
+<Accordions type="multiple">
+<Accordion title="POST /v1/admin/webhooks — Register webhook">
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | yes | Delivery URL. HTTPS is required unless `allow_local_webhooks` is enabled and the URL is loopback HTTP |
+| `events` | string[] | yes | Event types to subscribe to. Supported families are `collection.*` and `connector.sync.*` data-operation events |
+| `collections` | string[] | no | Filter by collection names (`null` = all) |
+
+**Response** `201`: Webhook object with `secret` field (shown once only). The secret is Fernet-encrypted at rest — see [Encryption at rest](/docs/deployment/encryption).
+
+```bash
+curl -X POST http://localhost:4000/v1/admin/webhooks \
+  -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/webhook",
+    "events": ["collection.truncated", "connector.sync.failed"]
+  }'
+```
+
+Supported event types: `collection.created`, `collection.updated`, `collection.deleted`, `collection.truncated`, `connector.sync.started`, `connector.sync.completed`, `connector.sync.failed`.
+
+</Accordion>
+
+<Accordion title="GET /v1/admin/webhooks — List webhooks">
+
+```
+GET /v1/admin/webhooks?limit=50&offset=0
+```
+
+**Response** `200`:
+
+```json
+{
+  "webhooks": [],
+  "total": 0
+}
+```
+
+`total` is the total number of configured webhooks before pagination.
+
+</Accordion>
+
+<Accordion title="GET /v1/admin/webhooks/{id} — Get webhook">
+
+Returns the full webhook object.
+
+</Accordion>
+
+<Accordion title="PUT /v1/admin/webhooks/{id} — Update webhook">
+
+Updatable fields: `url`, `events`, `collections`, `active`.
+
+</Accordion>
+
+<Accordion title="DELETE /v1/admin/webhooks/{id} — Delete webhook">
+
+Deletes the webhook registration.
+
+</Accordion>
+</Accordions>
+
+## Deliveries
+
+<Accordions type="multiple">
+<Accordion title="GET /v1/admin/webhooks/{id}/deliveries — List deliveries">
+
+```
+GET /v1/admin/webhooks/{id}/deliveries?limit=50&offset=0
+```
+
+Returns delivery history for a webhook, useful for debugging.
+
+</Accordion>
+
+<Accordion title="POST /v1/admin/webhooks/{id}/test — Test webhook">
+
+Sends a `webhook.test` event to verify the endpoint is reachable.
+
+</Accordion>
+
+<Accordion title="POST /v1/admin/webhooks/{id}/deliveries/{delivery_id}/replay — Replay delivery">
+
+Re-sends the original stored delivery payload to the webhook URL and records the replay attempt in the audit log. Use this after fixing a subscriber outage or endpoint bug.
+
+**Response** `200`:
+
+```json
+{
+  "status": "delivered",
+  "status_code": 200,
+  "error": null
+}
+```
+
+</Accordion>
+</Accordions>
+
+## Payload format
+
+Webhook events use a common envelope:
+
+```json
+{
+  "event": "connector.sync.completed",
+  "timestamp": "2026-05-22T00:00:00Z",
+  "collection": "docs",
+  "data": {
+    "provider": "s3",
+    "source_id": "source-id",
+    "job_id": "job-id",
+    "status": "complete",
+    "counts": {
+      "found": 12,
+      "created": 2,
+      "updated": 1,
+      "skipped": 9,
+      "deleted": 0,
+      "failed": 0
+    }
+  }
+}
+```
+
+<Callout type="info">
+Admin-plane events (`user.create`, `api_key.*`, `webhook.*`, settings changes) remain in the [audit log](/docs/api-reference/audit). Per-query success webhooks are intentionally not emitted; use access logs and analytics for high-RPS query monitoring.
+</Callout>
+
+## Headers & retry
+
+Each delivery includes these headers:
+
+```
+X-BigRAG-Signature: sha256=<hex digest>
+X-BigRAG-Timestamp: <unix timestamp>
+X-BigRAG-Event: connector.sync.completed
+X-BigRAG-Delivery: <delivery-uuid>
+```
+
+The signature is `HMAC-SHA256(secret, "{timestamp}.{raw_body}")`, where `timestamp` is the exact `X-BigRAG-Timestamp` value and `raw_body` is the delivered JSON body bytes decoded as UTF-8.
+
+Failed deliveries remain in the delivery outbox as `pending` with `next_retry_at` set for the next attempt. The dispatcher claims due rows, updates `attempts`, and marks the delivery `delivered` or `failed` once the retry budget is exhausted.

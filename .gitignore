@@ -1,0 +1,51 @@
+# Environment
+.env
+.env.local
+.env*.local
+
+# Data
+data/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+.ruff_cache/
+.coverage
+coverage/
+htmlcov/
+dist/
+build/
+.venv/
+
+# Node
+node_modules/
+
+# Next.js
+.next/
+.source/
+out/
+*.tsbuildinfo
+next-env.d.ts
+.tanstack/
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models cache
+.cache/
+
+# Build output
+target/
+
+# AI
+.codex-screenshots/
+.playwright-mcp/
+.claude/

@@ -1,0 +1,75 @@
+name: Docker
+
+concurrency:
+  group: docker-deploy
+  cancel-in-progress: true
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  push:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Read CalVer version
+        id: version
+        run: |
+          version=$(grep '^version = ' api/pyproject.toml | head -n 1 | sed -E 's/version = "([^"]+)"/\1/')
+          if [[ ! "$version" =~ ^[0-9]{4}\.[1-9][0-9]?\.[1-9][0-9]?$ ]]; then
+            echo "Invalid CalVer version: ${version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push API
+        uses: docker/build-push-action@v7
+        with:
+          context: ./api
+          file: api/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            yoginth/bigrag-api:${{ steps.version.outputs.version }}
+            yoginth/bigrag-api:latest
+            yoginth/bigrag-api:${{ env.DEPLOY_SHA }}
+          cache-from: type=gha,scope=bigrag-api
+          cache-to: type=gha,mode=max,scope=bigrag-api
+
+      - name: Build and push UI
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: app/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            yoginth/bigrag-ui:${{ steps.version.outputs.version }}
+            yoginth/bigrag-ui:latest
+            yoginth/bigrag-ui:${{ env.DEPLOY_SHA }}
+          cache-from: type=gha,scope=bigrag-ui
+          cache-to: type=gha,mode=max,scope=bigrag-ui

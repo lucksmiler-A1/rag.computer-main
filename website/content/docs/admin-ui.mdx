@@ -1,0 +1,120 @@
+---
+title: Admin UI
+description: Setup, collections, chat, connectors, API keys, usage, audit, webhooks, and settings.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The admin UI is the Vite + TanStack Router single-page app packaged with bigRAG. Every control is also a REST API, so the admin UI is optional — you can run bigRAG headless — but it's the fastest way to bootstrap, prototype, and operate the platform.
+
+Key UI behaviors:
+- Supports light, dark, and system themes; selection is stored in the browser and applies before the React app loads.
+- Operator forms use TanStack Form for client-side draft state, validation, resets, and submit handling with existing Base UI controls. This covers setup, login, collection creation and search, eval runs, API keys, MCP servers, account password changes, runtime settings, embedding presets, webhook creation, and connector credential forms.
+- Runtime settings save failures surface the backend validation detail returned by the settings API, including provider probe failures.
+- Collection creation keeps customer/tenant filter enforcement and JSON metadata-schema validation inside Advanced safeguards. Most collections can leave these disabled; enable customer separation only when one collection holds data for multiple customers, and enable metadata validation only when uploads need a fixed metadata shape.
+
+## Running the Admin UI
+
+```bash
+pnpm dev:app        # admin UI on http://localhost:3000
+```
+
+The admin UI calls the FastAPI backend directly. The default API URL is `http://localhost:4000`; override it with `VITE_BIGRAG_URL` at build/dev time or `BIGRAG_URL` in the app container. Configure browser origins through deployment config or the [instance settings API](/docs/api-reference/instance-settings) when running a split admin UI.
+
+For cross-site production deployments, enable secure session cookies and set `SameSite=none` through `BIGRAG_SESSION_COOKIE_*` bootstrap values or the instance settings API. Same-site subdomain deployments can usually keep `SameSite=lax`.
+
+## Route map
+
+| Path | Purpose |
+|------|---------|
+| `/setup` | One-time page to create the first admin account. Disappears once `needs_setup: false`. |
+| `/onboarding` | Authenticated first-run instance setup outside the dashboard shell. Shows embedding setup and vector config. The vector config **Save and Finish** action saves Turbopuffer API key, region, namespace prefix, and optional base URL, then continues to `/overview`. Completed instances that open `/onboarding` redirect back to `/overview`. |
+| `/login` | Email + password login for admins and members. |
+| `/overview` | Platform-wide stats — collection count, document states, stored token count, queue depth, readiness, and worker heartbeat. |
+| `/collections` | List, create, delete, and search collections. |
+| `/collections/[name]` | Collection overview with configuration badges, status counts, recent documents, and shortcuts. |
+| `/collections/[name]/documents` | Upload files or folders through resumable upload sessions, filter/search/sort documents with infinite scrolling, inspect status, bulk delete with typed confirmation, and delete individual documents. Uploads are disabled when `/v1/stats` reports no running `bigrag-worker`. |
+| `/collections/[name]/documents/[docId]` | Document detail — chunk viewer, ingestion progress, failed-ingest error, and delete. |
+| `/collections/[name]/connectors` | Redirects to the first available collection connector from the provider catalog. |
+| `/collections/[name]/connectors/s3` | Open the collection-scoped S3/R2 connector workspace with an inline source list, an Add source modal for bucket-prefix credentials, sync progress, manual resync, and schedule controls. Source creation and manual sync are disabled when the worker is offline. |
+| `/collections/[name]/search` | Query tester scoped to the collection — mode segments, top-k control, skip-cache runs, cancel/retry states, result metadata, document filenames, and chunk deep links. |
+| `/collections/[name]/settings` | Edit description, metadata, metadata schema, reranking, chunking, and default query params. |
+| `/chat` | Browser-local playground chat UI; retrieve from one collection, stream cited answers, render safe markdown, and keep local sessions across reloads. |
+| `/models` | Manage [embedding presets](/docs/api-reference/embedding-presets), including provider connection tests and OpenAI-compatible base URLs, plus fallback embedding, retrieval, and chat model settings. |
+| `/mcp` | Mint, scope, rotate, and revoke [MCP server](/docs/api-reference/mcp-servers) credentials for Claude Desktop / Cursor / custom MCP clients. |
+| `/api-keys` | Mint, scope, expire, rotate, test-on-create, and revoke `bigrag_sk_…` keys. Plaintext shown once at creation or rotation. |
+| `/access-logs` | Filterable access-log explorer for query, vector, chat, and evaluation traffic, with latency sorting and detail panels. |
+| `/usage` | Usage and cost explorer for requests, indexed data, tokens, average latency, and timeline trends. |
+| `/audit` | Filterable immutable admin audit trail with actor, action, resource, result, IP, redacted metadata detail, and timestamp details. |
+| `/webhooks` | Register, test, and delete webhooks. Delivery history and replay are available through the API. The page warns when data-operation deliveries are blocked by an offline worker. |
+| `/connectors` | Review S3/R2 source state across collections. |
+| `/settings` | Operator-console settings workspace for account, platform health, security, data flow, and vector storage. |
+| `/evals` | Run golden-set retrieval evaluations. |
+
+Unknown admin routes render the built-in 404 screen with links back to overview and collections. Unexpected route render failures use the admin 500 screen with a retry action, overview fallback, and a readable error-details panel showing the boundary error message, cause, and digest when available.
+
+The sidebar is grouped by operator task: Workspace, Interfaces, Observability, and Administration. Member accounts only see destinations available to their role.
+
+## Settings sections
+
+The `/models` page owns reusable embedding presets and runtime model settings. `/models` opens embedding presets by default; `/models?tab=settings` opens fallback embedding, retrieval, and chat settings; `/models?tab=settings&group=search` and `/models?tab=settings&group=chat` focus one model settings panel.
+
+The `/connectors` page lists configured S3/R2 sources across collections. Collection connector pages show source rows inline and open source creation in a modal; they own per-source credentials, schedule changes, manual sync, source deletion with confirmation, and sync-job progress through `/v1/connectors/s3/*`. Cloudflare R2 endpoint URLs set the connector signing region to `auto`.
+
+The Settings Vector storage tab exposes the saved Turbopuffer API key state, public-region dropdown, namespace prefix, and optional base URL through the same instance settings API.
+
+Settings accepts tab values via query param: `/settings?tab=account`, `/settings?tab=health`, `/settings?tab=security`, `/settings?tab=data`, and `/settings?tab=vector_store`.
+
+| Group | Section | Reads from | Writes to |
+|-------|---------|-----------|-----------|
+| **Personal** | Account | `GET /v1/auth/me` | `PATCH /v1/admin/users/{user_id}`, `POST /v1/auth/password`, `POST /v1/auth/logout-all` |
+| **Operate** | Health | `GET /health/ready`, `GET /v1/status/overview` | — |
+| **Operate** | Security | `GET /v1/admin/settings` | `PUT /v1/admin/settings`, `POST /v1/admin/settings/embedding-cache/purge` |
+| **Operate** | Data | `GET /v1/admin/settings` | `PUT /v1/admin/settings` |
+| **Operate** | Vector storage | `GET /v1/admin/settings` | `PUT /v1/admin/settings` |
+
+## Polling updates
+
+The admin UI does not open sockets. Page header numbers use lightweight REST status endpoints and React Query polling:
+
+| Surface | Endpoint | Interval |
+|---------|----------|----------|
+| Overview | `GET /v1/status/overview` | 5 seconds |
+| Usage | `GET /v1/status/usage?window_days=...` | 5 seconds |
+| Access log header cards | `GET /v1/admin/status/access?window_days=...` | 5 seconds |
+
+Platform, collection, usage, and access-log stat endpoints are uncached so reloads and manual refreshes reflect the latest totals. Readiness and provider health checks may still cache dependency probes because they are not document or traffic stats.
+
+The collection documents page keeps pagination on REST fetches for initial load, filter changes, loading more rows, and the toolbar refresh button. It does not auto-refresh the document list. Document detail pages may poll the single-document endpoint every 5 seconds while a document is still `pending` or `processing`, then stop once the document is `ready` or `failed`.
+
+**Worker-offline UX:** The overview status response drives the offline indicator. When `workers.online` is `false`, the admin UI shows `bigrag-worker is offline`, includes the last heartbeat age when available, and disables actions that would enqueue uploads, S3 source sync, or manual S3 resync. Missing worker stats are treated as unknown, so actions remain available until an offline heartbeat is confirmed.
+
+**Large upload progress:** After a large local upload starts, the collection documents page polls `GET /v1/collections/{collection}/upload-sessions/{session_id}` every 2 seconds while the upload session is active and visible. The panel renders the active summary plus a small item window that prioritizes active and failed files before older completed rows, so 10,000-file uploads do not require 10,000 document status reads. If a linked document is deleted while the upload session remains visible, the item is treated as canceled rather than active queued work. Terminal sessions are removed automatically once no active or failed work remains.
+
+**S3/R2:** The S3 connector page polls source and sync-job REST endpoints every 2 seconds. The sync monitor shows object scanning, concurrent download/update progress, remote deletion cleanup, and queued-for-ingestion completion; document conversion and indexing continue through the normal document progress surfaces.
+
+Upload progress restoration is browser-local admin UI state. Upload session IDs are persisted in local storage so a collection's upload panel can resume polling after navigation; stale upload-session IDs are cleared without a failure alert when the API returns `404`. Chat turns are in-memory only and are not persisted in browser storage or the REST API.
+
+## Chat specifics
+
+The chat UI sends each turn to `POST /v1/chat`. Retrieval, prompt assembly, provider calls, and citations happen on the backend; chat messages and conversations are not persisted anywhere. The saved chat provider key stays on the backend — preference responses only expose whether a key is configured. Preferences such as model, temperature, `top_k`, search mode, rerank preference, and system prompt persist via `/v1/auth/preferences`.
+
+Playground answers render safe CommonMark/GFM Markdown, including emphasis, lists, task lists, code, blockquotes, links, and tables. Raw HTML is not enabled, and source citations remain clickable inside rendered Markdown.
+
+Source cards keep long extracted snippets inside the chat column, including compact JSON, IDs, and other unbroken tokens from synthetic or machine-generated documents.
+
+The empty chat screen does not show generic default prompts. After a collection is selected, operators can generate five random starter questions using the saved chat provider key. The backend samples that collection's ready documents and chunks, saves the latest generated set for the collection, and returns that saved set after reloads.
+
+### Citations
+
+Retrieved chunks carry citation provenance — `document_id`, `document_filename`, `chunk_index`, and Docling-derived `page_no` / `char_start` / `char_end` (see [`ChatSource`](/docs/api-reference/chat)). The backend hands source IDs, filenames, chunk labels, document metadata, and chunk text to the LLM and instructs the model to cite with bracketed numbers. If a question names an exact document UUID, the backend can add that document's metadata as a source even when the matching chunk text was not retrieved. In the rendered answer, `[N]` and grouped `[N,M]` citations are clickable, expand the answer's **Sources** section, and scroll to matching source cards; source cards deep-link to the document chunk when the document is available.
+
+<Callout type="info">
+The admin UI uses session cookies exclusively. To automate anything the admin UI does, mint an API key at `/api-keys` and use it with one of the [SDKs](/docs/sdks/typescript) — or with raw HTTP using the same REST endpoints.
+</Callout>
+
+## When to skip the Admin UI
+
+- **Pure backend deployment** — no admin UI process, everything via API keys and SDKs. Set `BIGRAG_ENV=prod`, use [`POST /v1/auth/setup`](/docs/api-reference/authentication) from an admin workstation to bootstrap, then create at least one embedding preset through the admin API before indexing documents.
+- **Embedded experiences** — if you're surfacing search inside your own app, skip admin UI and build against the [query API](/docs/api-reference/query).
+- **Read-only operators** — create a `member` account; they get `/overview`, `/collections` (read), and `/chat` but can't mutate.

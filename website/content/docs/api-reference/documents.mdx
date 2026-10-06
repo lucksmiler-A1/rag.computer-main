@@ -1,0 +1,416 @@
+---
+title: Documents
+description: API endpoints for uploading, managing, and monitoring documents.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+Base path: `/v1/collections/{collection_name}/documents`
+
+All endpoints require [authentication](/docs/api-reference/authentication). API keys need:
+
+- `document:upload` — upload, batch upload, upload-session create/file/complete
+- `document:read` — list, get, chunks, elements, batch get/status
+- `document:delete` — delete, batch delete
+
+## Core
+
+<Accordions type="multiple">
+<Accordion title="POST /v1/collections/{collection_name}/documents — Upload document">
+
+Upload a document for ingestion. Uses `multipart/form-data`.
+
+```bash
+curl -X POST http://localhost:4000/v1/collections/research/documents \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -F "file=@paper.pdf" \
+  -F 'metadata={"author": "Smith", "year": 2026}'
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `file` | file | yes | The document file |
+| `metadata` | string (JSON) | no | JSON string of metadata to attach |
+
+**Supported file types:** `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.html`, `.htm`, `.md`, `.txt`, `.csv`, `.tsv`, `.xml`, `.json`, `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.gif`
+
+**Max file size:** 64 MB by default (configurable via `BIGRAG_MAX_UPLOAD_SIZE_MB`)
+
+**Response** `201`:
+
+```json
+{
+  "id": "660e8400-e29b-41d4-a716-446655440000",
+  "collection_id": "550e8400-e29b-41d4-a716-446655440000",
+  "filename": "paper.pdf",
+  "file_type": "pdf",
+  "file_size": 1048576,
+  "chunk_count": 0,
+  "multimodal_element_count": 0,
+  "status": "pending",
+  "error_message": null,
+  "metadata": { "author": "Smith", "year": 2026 },
+  "content_hash": "7f3c…",
+  "deduped": false,
+  "created_at": "2026-04-01T00:00:00Z",
+  "updated_at": "2026-04-01T00:00:00Z"
+}
+```
+
+`content_hash` is a SHA-256 of the uploaded bytes used for deduplication. If the collection already has a document with the same hash, the existing record is returned with `deduped: true` instead of creating a duplicate. The uploaded original is used only as temporary ingestion staging and is deleted after processing reaches a terminal state. See [Collections → `content_hash` dedup](/docs/concepts/collections).
+
+**Errors:** `400` — Unsupported file type or blocked by metadata-schema checks, `404` — Collection not found, `413` — File too large, `503` — Queue unavailable (document is stored as `failed`)
+
+</Accordion>
+
+<Accordion title="GET /v1/collections/{collection_name}/documents — List documents">
+
+| Parameter | Type | Default | Constraints |
+|-----------|------|---------|-------------|
+| `q` | string | — | Searches filename, file type, ID, and error text |
+| `status` | string | — | `pending`, `processing`, `ready`, `failed` |
+| `sort` | string | `created_at` | `created_at`, `updated_at`, `filename`, `file_size`, `chunk_count`, `status` |
+| `order` | string | `desc` | `asc` or `desc` |
+| `limit` | integer | `100` | 1–1,000 |
+| `offset` | integer | `0` | 0+ |
+| `cursor` | string | — | Cursor returned as `next_cursor`; requires `sort=created_at` |
+| `include_total` | boolean | `false` | Include the matching document count |
+
+**Response** `200`:
+
+```json
+{
+  "documents": [
+    {
+      "id": "...",
+      "filename": "paper.pdf",
+      "file_type": "pdf",
+      "file_size": 1048576,
+      "chunk_count": 24,
+      "multimodal_element_count": 6,
+      "status": "ready",
+      "error_message": null,
+      "metadata": {},
+      "content_hash": "7f3c…",
+      "deduped": false,
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "total": 15,
+  "next_cursor": null
+}
+```
+
+</Accordion>
+
+<Accordion title="GET /v1/collections/{collection_name}/documents/{document_id} — Get document">
+
+**Response** `200`: Full document object.
+
+**Errors:** `404` — Document or collection not found
+
+</Accordion>
+
+<Accordion title="DELETE /v1/collections/{collection_name}/documents/{document_id} — Delete document">
+
+Deletes the document and its associated vectors.
+
+**Response** `200`:
+
+```json
+{ "status": "ok", "message": "Document deleted" }
+```
+
+**Errors:** `404` — Document or collection not found
+
+</Accordion>
+
+<Accordion title="GET /v1/collections/{collection_name}/documents/{document_id}/chunks — Get chunks">
+
+Get chunks for a processed document. If the document exists but its Turbopuffer namespace has not been created yet or was already removed, the endpoint returns an empty chunk list with `total: 0`.
+
+| Parameter | Type | Default | Constraints |
+|-----------|------|---------|-------------|
+| `limit` | integer | `50` | 1–1,000 |
+| `offset` | integer | `0` | 0+ |
+
+**Response** `200`:
+
+```json
+{
+  "chunks": [
+    {
+      "id": "chunk_001",
+      "document_id": "660e8400-e29b-41d4-a716-446655440000",
+      "text": "This is the first chunk of text...",
+      "chunk_index": 0,
+      "metadata": { "page": 1 }
+    }
+  ],
+  "total": 24
+}
+```
+
+Each chunk returns `document_id` as a top-level field. `metadata` contains the remaining chunk/document payload metadata and omits fixed fields such as `text`, `chunk_index`, and `document_id`.
+
+</Accordion>
+
+<Accordion title="GET /v1/collections/{collection_name}/documents/{document_id}/elements — Get elements">
+
+List stored multimodal document elements. Returns an empty list unless the collection had `multimodal_enabled` when the document was ingested.
+
+| Parameter | Type | Default | Constraints |
+|-----------|------|---------|-------------|
+| `limit` | integer | `100` | 1–1,000 |
+| `offset` | integer | `0` | 0+ |
+
+**Response** `200`:
+
+```json
+{
+  "elements": [
+    {
+      "id": "880e8400-e29b-41d4-a716-446655440000",
+      "document_id": "660e8400-e29b-41d4-a716-446655440000",
+      "collection_id": "550e8400-e29b-41d4-a716-446655440000",
+      "element_index": 2,
+      "kind": "table",
+      "text": "| Metric | Value |",
+      "summary": null,
+      "caption": null,
+      "asset_path": null,
+      "page_no": 1,
+      "bbox": null,
+      "char_start": 240,
+      "char_end": 410,
+      "surrounding_context": "Nearby extracted text...",
+      "metadata": { "source": "docling" },
+      "enrichment_status": "not_requested",
+      "enrichment_error": null,
+      "created_at": "2026-04-01T00:00:00Z",
+      "updated_at": "2026-04-01T00:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+`kind` is one of `text`, `heading`, `table`, `image`, `equation`, or `unknown`. `enrichment_status` is `not_requested`, `pending`, `ready`, or `failed`.
+
+</Accordion>
+
+<Accordion title="GET /v1/documents/{document_id} — Global document lookup">
+
+Convenience read endpoints that resolve the document by UUID without the caller supplying the collection name. Still requires `document:read`; collection-pinned API keys can only use them for documents that belong to their pinned collection.
+
+```
+GET /v1/documents/{document_id}
+GET /v1/documents/{document_id}/chunks
+```
+
+</Accordion>
+</Accordions>
+
+## Batch & sessions
+
+<Accordions type="multiple">
+<Accordion title="POST /v1/collections/{collection_name}/documents/batch/upload — Batch upload">
+
+Upload up to 100 files in one request. Each file goes through the same extension sniffing, metadata-schema validation, and `content_hash` deduplication pipeline as the single-file upload endpoint.
+
+```bash
+curl -X POST http://localhost:4000/v1/collections/docs/documents/batch/upload \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -F "files=@paper1.pdf" \
+  -F "files=@paper2.pdf" \
+  -F 'metadata={"source": "batch-import"}'
+```
+
+**Response** `201`:
+
+```json
+{
+  "documents": [
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440000",
+      "filename": "paper.pdf",
+      "status": "pending",
+      "deduped": false
+    },
+    {
+      "id": "770e8400-e29b-41d4-a716-446655440000",
+      "filename": "duplicate.pdf",
+      "status": "ready",
+      "deduped": true
+    }
+  ],
+  "total": 2
+}
+```
+
+If queueing fails for an item, that document is still returned but with `status: "failed"` plus an `error_message`, rather than being left stuck in `pending`.
+
+</Accordion>
+
+<Accordion title="POST /v1/collections/{collection_name}/upload-sessions — Upload sessions">
+
+Upload sessions are the large-upload path for thousands of local files. They create one durable session, then upload files one request at a time so browsers and proxies never build a giant multipart body.
+
+**Create session:**
+
+```
+POST /v1/collections/{collection_name}/upload-sessions
+```
+
+```json
+{
+  "total_files": 10000,
+  "total_bytes": 2147483648,
+  "metadata": { "source": "folder-import" }
+}
+```
+
+**Response** `201`:
+
+```json
+{
+  "id": "upload-session-id",
+  "status": "preparing",
+  "total_files": 10000,
+  "uploaded_files": 0,
+  "queued_files": 0,
+  "processing_files": 0,
+  "completed_files": 0,
+  "failed_files": 0,
+  "recent_items": []
+}
+```
+
+**Upload one file:**
+
+```
+POST /v1/collections/{collection_name}/upload-sessions/{session_id}/files
+```
+
+```bash
+curl -X POST http://localhost:4000/v1/collections/docs/upload-sessions/$SESSION_ID/files \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -F "client_item_id=folder-000001" \
+  -F "file=@contract.pdf"
+```
+
+Each accepted file is validated, deduped by `content_hash`, staged temporarily, converted into a `Document`, and queued for ingestion. Failed files are recorded as upload-session items and do not abort the session.
+
+**Session lifecycle endpoints:**
+
+```
+GET  /v1/collections/{collection_name}/upload-sessions/{session_id}
+POST /v1/collections/{collection_name}/upload-sessions/{session_id}/complete
+POST /v1/collections/{collection_name}/upload-sessions/{session_id}/cancel
+```
+
+- `GET` — returns aggregate counts plus the latest active or failed items.
+- `complete` — marks the upload phase closed; ingestion can still continue until all linked documents are `ready` or `failed`. If a linked document is deleted after upload, its session item is reported as `canceled` instead of `queued`.
+- `cancel` — closes the session and cancels active queued documents created by that session.
+
+</Accordion>
+
+<Accordion title="POST /v1/collections/{collection_name}/documents/batch/get — Batch get">
+
+Fetch full metadata for up to 100 documents by ID.
+
+```json
+{ "document_ids": ["doc-id-1", "doc-id-2"] }
+```
+
+**Response** `200`:
+
+```json
+{
+  "documents": [
+    {
+      "id": "doc-id-1",
+      "collection_id": "...",
+      "filename": "paper.pdf",
+      "file_type": "pdf",
+      "file_size": 1048576,
+      "chunk_count": 24,
+      "status": "ready",
+      "error_message": null,
+      "metadata": {},
+      "content_hash": "7f3c…",
+      "deduped": false,
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "total": 1
+}
+```
+
+Unlike Batch Status (which returns only `id`, `status`, `error_message`, `chunk_count`), this endpoint returns the complete document object including `filename`, `file_size`, `file_type`, and `metadata`.
+
+</Accordion>
+
+<Accordion title="POST /v1/collections/{collection_name}/documents/batch/delete — Batch delete">
+
+Delete any number of documents in one request. The server processes the request in internal chunks, so large deletes avoid oversized database predicates, unbounded vector-store calls, and unbounded cleanup fan-out. Partial success is supported — missing or failed deletes are returned in `errors` rather than aborting the whole batch.
+
+```json
+{ "document_ids": ["doc-id-1", "doc-id-2"] }
+```
+
+**Response** `200`:
+
+```json
+{
+  "status": "ok",
+  "deleted": 2,
+  "errors": [
+    { "document_id": "doc-id-3", "error": "Document not found" }
+  ]
+}
+```
+
+</Accordion>
+</Accordions>
+
+## Status & polling
+
+<Accordions type="multiple">
+<Accordion title="POST /v1/collections/{collection_name}/documents/batch/status — Batch status">
+
+Check status of up to 100 documents.
+
+```json
+{ "document_ids": ["doc-id-1", "doc-id-2"] }
+```
+
+Returns `id`, `status`, `chunk_count`, `error_message`, and the latest `progress` snapshot for each found document. API clients can poll this endpoint after batch upload until every requested document is `ready` or `failed`.
+
+</Accordion>
+
+<Accordion title="GET /v1/collections/{collection_name}/documents/{document_id} — Single document polling">
+
+Use `GET /v1/collections/{collection_name}/documents/{document_id}` for a single document. Poll while `status` is `pending` or `processing`, then stop once it reaches `ready` or `failed`.
+
+Document status responses include a `progress` object with the latest ingestion event snapshot:
+
+```json
+{
+  "status": "processing",
+  "chunk_count": 0,
+  "progress": {
+    "step": "ocr",
+    "status": "processing",
+    "message": "OCR pages 1-10 of 652",
+    "progress": 0.12,
+    "detail": { "page_start": 1, "page_end": 10, "pages_total": 652 }
+  }
+}
+```
+
+</Accordion>
+</Accordions>

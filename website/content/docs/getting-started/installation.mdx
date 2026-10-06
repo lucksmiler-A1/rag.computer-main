@@ -1,0 +1,109 @@
+---
+title: Installation
+description: Install and run bigRAG using Docker Compose or from source.
+---
+
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Steps, Step } from "fumadocs-ui/components/steps";
+import { Callout } from "fumadocs-ui/components/callout";
+
+## Prerequisites
+
+- **Docker** and **Docker Compose** (recommended)
+- **Python 3.12+** and [**uv**](https://docs.astral.sh/uv/) (for running the backend from source)
+- An **OpenAI**, **Cohere**, **Voyage**, or OpenAI-compatible API key for embeddings
+- A **Turbopuffer** API key for managed vector, keyword, and hybrid search
+
+## Install
+
+<Tabs items={["Docker Compose", "From Source"]}>
+<Tab value="Docker Compose">
+
+The fastest way to get started. One command starts the full stack:
+
+```bash
+docker compose up -d
+```
+
+This starts:
+
+- **bigRAG API** on port `4000` (Swagger docs at `/docs`)
+- **Admin UI** on port `3000`
+- **PostgreSQL** for metadata on port `5432`
+- **Redis** for the ingestion queue on port `6379`
+
+Turbopuffer is configured from the admin UI after setup and provides the managed search backend; it is not a local Compose service.
+
+Pre-built images are published to Docker Hub:
+
+```bash
+docker pull yoginth/bigrag-api:latest
+docker pull yoginth/bigrag-ui:latest
+```
+
+Release artifacts use CalVer (`YYYY.M.D`). Docker publishes `latest` for convenience, but production deployments should pin the dated tag from the release they deploy.
+
+</Tab>
+<Tab value="From Source">
+
+<Steps>
+<Step>
+### Start infrastructure services
+
+```bash
+docker compose up postgres redis -d
+```
+</Step>
+<Step>
+### Install and run the backend
+
+```bash
+cd api
+uv sync
+uv run python -m bigrag.main
+```
+
+Or with pip:
+
+```bash
+cd api
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+python -m bigrag.main
+```
+</Step>
+</Steps>
+
+</Tab>
+</Tabs>
+
+## Development Mode
+
+The easiest way to start everything for development:
+
+```bash
+./dev.sh
+```
+
+This script:
+
+1. Kills stale processes on port 4000 and old local `bigrag-worker` processes.
+2. Validates required commands (`docker`, `curl`, `uv`).
+3. Starts Docker services (Postgres and Redis) and waits for readiness.
+4. Installs Python dependencies with `uv`.
+5. Starts the backend with auto-reload and a bounded `/health` startup probe.
+6. Starts `bigrag-worker` with five Dramatiq processes on Redis.
+7. Gracefully stops everything on Ctrl+C.
+
+If the admin UI shows `bigrag-worker is offline`, check the terminal for the colored `work` log stream. Each worker-side log line includes the active Dramatiq process label and PID, such as `worker=worker-1 pid=12345`. Override the local process count with `BIGRAG_WORKER_PROCESSES` and thread count with `BIGRAG_WORKER_THREADS`. A healthy local worker should keep running and `/v1/stats` should report a recent worker heartbeat for the signed-in admin session.
+
+## Verify
+
+```bash
+curl http://localhost:4000/health
+# → {"status": "ok", "version": "2026.x.y"}
+```
+
+<Callout type="info">
+  Interactive Swagger docs are available at [http://localhost:4000/docs](http://localhost:4000/docs) once the server is running. Database migrations run automatically on startup.
+</Callout>

@@ -1,0 +1,6 @@
+packages:
+  - "sdks/typescript"
+  - "website"
+  - "app"
+
+minimumReleaseAge: 10080

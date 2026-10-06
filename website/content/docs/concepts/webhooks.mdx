@@ -1,0 +1,121 @@
+---
+title: Webhooks
+description: Get notified when collections and connectors change with HMAC-signed webhook payloads.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Webhooks push notifications when data operations change state. They're useful for triggering downstream workflows when connector syncs finish or collections change.
+
+## Events
+
+| Event | Description |
+|-------|-------------|
+| `collection.created` | Collection was created |
+| `collection.updated` | Collection settings changed |
+| `collection.deleted` | Collection was deleted |
+| `collection.truncated` | Collection documents were removed |
+| `connector.sync.started` | Connector sync started |
+| `connector.sync.completed` | Connector sync completed without failures |
+| `connector.sync.failed` | Connector sync failed or completed with failed items |
+
+## Registering a Webhook
+
+```bash
+curl -X POST http://localhost:4000/v1/admin/webhooks \
+  -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/webhook",
+    "events": ["collection.truncated", "connector.sync.failed"],
+    "collections": ["knowledge_base"]
+  }'
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | yes | Delivery URL. HTTPS is required unless `allow_local_webhooks` is enabled and the URL is loopback HTTP |
+| `events` | string[] | yes | Event types to subscribe to |
+| `collections` | string[] | no | Filter by collection names (`null` = all) |
+
+<Callout type="warn">
+The response includes a `secret` field that is shown only once. Store it — it's used to verify webhook signatures.
+</Callout>
+
+## Payload Format
+
+Webhook events use a common envelope:
+
+```json
+{
+  "event": "connector.sync.completed",
+  "timestamp": "2026-05-22T00:00:00Z",
+  "collection": "docs",
+  "data": {
+    "provider": "s3",
+    "source_id": "source-id",
+    "job_id": "job-id",
+    "status": "complete",
+    "counts": {
+      "found": 12,
+      "created": 2,
+      "updated": 1,
+      "skipped": 9,
+      "deleted": 0,
+      "failed": 0
+    }
+  }
+}
+```
+
+Collection filters apply to collection-scoped events.
+
+## Signature Verification
+
+Each delivery includes an `X-BigRAG-Signature` header with an HMAC-SHA256 signature:
+
+```
+X-BigRAG-Signature: sha256=<hex digest>
+X-BigRAG-Timestamp: <unix timestamp>
+X-BigRAG-Event: connector.sync.completed
+X-BigRAG-Delivery: <delivery-uuid>
+```
+
+Verify by computing `HMAC-SHA256(webhook_secret, "{timestamp}.{raw_body}")`:
+
+```python
+import hashlib
+import hmac
+
+def verify(payload: bytes, secret: str, timestamp: str, signature: str) -> bool:
+    signed_payload = timestamp.encode() + b"." + payload
+    expected = "sha256=" + hmac.HMAC(
+        secret.encode(), signed_payload, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+```
+
+## Retry Policy
+
+Failed deliveries are stored in the delivery outbox before the first attempt. Retries use the configured exponential backoff window and remain `pending` with `next_retry_at` until the next due attempt, so process restarts can resume delivery. After all attempts, the delivery is marked `failed`.
+
+Check delivery history:
+
+```bash
+curl http://localhost:4000/v1/admin/webhooks/{id}/deliveries \
+  -b cookies.txt
+```
+
+## Testing
+
+Send a `webhook.test` event to verify your endpoint is reachable:
+
+```bash
+curl -X POST http://localhost:4000/v1/admin/webhooks/{id}/test \
+  -b cookies.txt
+```
+
+## Limits
+
+- Maximum 50 webhooks per instance
+- Delivery timeout: 10 seconds (configurable via `BIGRAG_WEBHOOK_DELIVERY_TIMEOUT`)

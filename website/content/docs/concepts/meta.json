@@ -1,0 +1,12 @@
+{
+  "title": "Concepts",
+  "pages": [
+    "architecture",
+    "collections",
+    "documents",
+    "embeddings",
+    "search",
+    "security",
+    "webhooks"
+  ]
+}

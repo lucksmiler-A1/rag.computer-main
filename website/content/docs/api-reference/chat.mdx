@@ -1,0 +1,115 @@
+---
+title: Chat
+description: Stateless playground chat API with retrieval, generated answers, and citations.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+Base path: `/v1/chat`
+
+The chat API retrieves chunks from a collection, builds the grounded prompt on the backend, calls the configured chat provider, and returns cited answers. Source context includes document IDs, filenames, chunk labels, document metadata, and chunk text. It does not store chat messages or conversations.
+
+Accepts session auth and API-key auth. Scoped API keys can use chat when granted `chat:write`; collection-pinned keys can only chat against their pinned collection.
+
+**Provider configuration:**
+
+- Supported providers: `openai` and `openai_compatible`. Save the provider key in the admin UI at `chat.openai_key`.
+- API clients can also pass `provider_api_key` per request to bypass the saved key.
+- `BIGRAG_CHAT_API_KEY` is an instance-level fallback for the default OpenAI chat endpoint only. If `chat_base_url` or request `provider_base_url` points to a non-default OpenAI-compatible endpoint, a saved chat key or `provider_api_key` is required — the instance fallback key is rejected before any provider call.
+
+<Accordions type="multiple">
+
+<Accordion title="GET /POST /v1/chat/question-suggestions — Question suggestions">
+
+```
+GET /v1/chat/question-suggestions?collection=handbook
+POST /v1/chat/question-suggestions
+```
+
+`GET` returns the last generated starter-question set for the collection, or an empty set when none has been generated.
+
+`POST` uses the saved chat/OpenAI key from the current user's preferences or the instance fallback when the default OpenAI endpoint is in use. With a non-default chat base URL, question generation requires a saved chat key because it cannot accept a per-request provider key.
+
+**POST body:**
+
+```json
+{
+  "collection": "handbook",
+  "model": "gpt-4.1",
+  "temperature": 0.7
+}
+```
+
+**Response:**
+
+```json
+{
+  "collection": "handbook",
+  "questions": [
+    "What is the PTO approval flow?",
+    "Which source defines receipt requirements?",
+    "Who reviews escalation requests?",
+    "What exceptions should be cited?",
+    "How do reimbursement limits work?"
+  ],
+  "generated_at": "2026-05-16T04:45:00+00:00",
+  "model": "gpt-4.1"
+}
+```
+
+</Accordion>
+
+<Accordion title="POST /v1/chat — Create chat turn">
+
+```
+POST /v1/chat
+```
+
+**Request body:**
+
+```json
+{
+  "collection": "handbook",
+  "message": "What is the PTO approval policy?",
+  "model": "gpt-4.1",
+  "top_k": 8,
+  "search_mode": "hybrid",
+  "rerank": true,
+  "multimodal": true,
+  "stream": false
+}
+```
+
+Non-streaming responses include the current user message, current assistant message, sources, and timings.
+
+Set `multimodal: true` to include retrieved element text, captions, and generated summaries when the collection has `multimodal_enabled`. Source objects include `multimodal_elements` hydrated from the retrieved chunk's own document inside the requested collection. bigRAG does not retain binary image payloads after ingestion staging cleanup.
+
+When `search_mode` is `semantic` and the message contains identifier-like tokens such as UUIDs, chat uses hybrid retrieval for that turn so exact IDs and error codes are matched lexically. The response retrieval payload includes both `requested_search_mode` and the effective `search_mode`. If the message names a document UUID in the selected collection, the source list can include a metadata-only source for that document.
+
+**Streaming:** Set `stream: true` to receive Server-Sent Events:
+
+```text
+event: user_message
+data: {"id":"...","role":"user","content":"..."}
+
+event: sources
+data: {"collection":"handbook","sources":[...],"timings":{"cache_hit":false,"total_ms":42.1}}
+
+event: delta
+data: {"delta":"PTO"}
+
+event: assistant_message
+data: {"id":"...","role":"assistant","content":"PTO requires..."}
+
+event: done
+data: {}
+
+data: [DONE]
+```
+
+If provider generation fails after streaming starts, the API emits an `error` event followed by `data: [DONE]`.
+
+</Accordion>
+
+</Accordions>

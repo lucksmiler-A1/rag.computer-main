@@ -1,0 +1,89 @@
+---
+title: Evaluation
+description: Measure retrieval quality against a labelled query set.
+---
+
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+```
+POST /v1/evaluation
+```
+
+Runs a batch of queries against a collection and scores the retrieved chunks against a labelled set of expected document IDs. Used to catch regressions when tweaking chunk size, embedding model, reranking, or search mode.
+
+Accepts a session cookie or an API key with `query:read`.
+
+The admin UI exposes the same runner under **Settings → Evaluation**.
+
+<Accordions type="multiple">
+
+<Accordion title="POST /v1/evaluation — Run evaluation">
+
+**Request:**
+
+```json
+{
+  "collection": "knowledge_base",
+  "search_mode": "hybrid",
+  "top_k": 10,
+  "filters": { "department": "support" },
+  "cases": [
+    {
+      "query": "how do I rotate an API key?",
+      "relevant_ids": ["doc-abc-123", "doc-abc-456"]
+    },
+    {
+      "query": "what's the PTO policy?",
+      "relevant_ids": ["doc-def-789"],
+      "filters": { "region": "us" },
+      "top_k": 5
+    }
+  ]
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `collection` | string | yes | Target collection name |
+| `cases[]` | array | yes | 1–500 labelled cases |
+| `cases[].query` | string | yes | Non-empty |
+| `cases[].relevant_ids` | string[] | yes | Document IDs (or chunk IDs of the form `<doc>#<n>`); at least one |
+| `cases[].filters` | object | no | Per-case metadata filters; overrides request-level `filters` for that case |
+| `cases[].top_k` | integer | no | 1–100. Overrides the request-level `top_k` for this case |
+| `filters` | object | no | Request-level metadata filters applied to cases that omit `cases[].filters` |
+| `top_k` | integer | no | 1–100, default `10`. Used when a case omits its own `top_k` |
+| `search_mode` | string | no | `semantic` (default), `keyword`, or `hybrid` |
+
+The collection's saved reranking config is applied automatically — there is no `rerank` flag.
+
+**Response:**
+
+```json
+{
+  "collection": "knowledge_base",
+  "total_cases": 2,
+  "recall_at_k_avg": 0.85,
+  "mrr": 0.73,
+  "ndcg_at_k_avg": 0.81,
+  "per_case": [
+    {
+      "query": "how do I rotate an API key?",
+      "hit_ids": ["doc-abc-123", "doc-xyz-001", "doc-abc-456"],
+      "expected_ids": ["doc-abc-123", "doc-abc-456"],
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "ndcg_at_k": 0.91
+    }
+  ]
+}
+```
+
+**Metrics:**
+
+- **Recall@k** — fraction of `relevant_ids` that appear anywhere in the top-k hits
+- **MRR** — `1 / rank` of the first relevant hit, averaged across cases
+- **nDCG@k** — rank-discounted relevance, averaged across cases
+
+</Accordion>
+
+</Accordions>

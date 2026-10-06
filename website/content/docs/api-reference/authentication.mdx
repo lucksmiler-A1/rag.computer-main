@@ -1,0 +1,151 @@
+---
+title: Authentication
+description: Admin accounts with session cookies and minted API keys.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Every request is authenticated as either:
+
+- **An admin account** via a session cookie (used by the admin UI and browser-based flows), or
+- **An API key** (`bigrag_sk_…`) minted by an admin (used by backend services, SDKs, and automation).
+
+## First-run setup
+
+A fresh install has no users. The first admin is created via the one-time setup endpoint, which is the only admin-capable endpoint that works without authentication.
+
+```bash
+# Check whether setup is still required
+curl http://localhost:4000/v1/auth/setup-status
+# → {"needs_setup": true}
+
+# Create the first admin (works exactly once)
+curl -X POST http://localhost:4000/v1/auth/setup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@example.com",
+    "password": "a-strong-password",
+    "display_name": "Admin"
+  }'
+```
+
+Once at least one admin exists, `setup-status` returns `{"needs_setup": false}` and `/v1/auth/setup` returns `409`.
+
+The admin UI exposes the same flow at `http://localhost:3000/setup`. After the first admin is created, the UI redirects the signed-in admin to `/onboarding` to create a verified embedding preset and save Turbopuffer settings before collection work. The setup endpoint itself still only creates the first admin and session.
+
+## Session auth (admin UI, browser)
+
+Logging in returns a `bigrag_session` cookie (configurable via `BIGRAG_SESSION_COOKIE_NAME`). All subsequent requests from that browser are authenticated by the cookie.
+
+```bash
+curl -X POST http://localhost:4000/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{"email": "admin@example.com", "password": "a-strong-password"}'
+
+curl http://localhost:4000/v1/auth/me -b cookies.txt
+```
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/v1/auth/login` | Email + password → session cookie |
+| `POST` | `/v1/auth/logout` | Clear current session |
+| `POST` | `/v1/auth/logout-all` | Revoke every session for the current user |
+| `GET`  | `/v1/auth/me` | Return the current user |
+| `GET`  | `/v1/auth/whoami` | Return the current principal's identity, auth method, and (for API keys) scopes / collection pin — used by SDKs and the MCP server to self-configure |
+| `POST` | `/v1/auth/password` | Change password; revokes all other sessions |
+
+Session cookie attributes are seeded from `BIGRAG_SESSION_COOKIE_*` bootstrap values and can also be managed through [`/v1/admin/settings`](/docs/api-reference/instance-settings). The admin UI does not expose those fields on the Security tab. In production you must set `session_cookie_secure=true` before serving admin traffic over HTTPS.
+
+<Callout type="info">
+Some endpoints (create user, manage API keys, change passwords) require a **session** and cannot be invoked with an API key — this keeps long-lived keys from being able to self-replicate or escalate.
+</Callout>
+
+## API key auth (SDKs, services)
+
+API keys are minted by an admin at `/v1/admin/api-keys` (or via the admin UI → **API keys**). The plaintext key is shown **once**:
+
+```bash
+curl -X POST http://localhost:4000/v1/admin/api-keys \
+  -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ingestion-worker", "scopes": ["collection:read", "document:*"]}'
+# → {"id": "...", "name": "ingestion-worker", "prefix": "bigrag_sk_abcd", ...,
+#     "key": "bigrag_sk_abcd…_XXXXXXXXXXXXXXXXXXXXXXXX"}
+```
+
+Send the key as a bearer token:
+
+```bash
+curl http://localhost:4000/v1/collections \
+  -H "Authorization: Bearer bigrag_sk_…"
+```
+
+### Key fields
+
+| Field | Notes |
+|-------|-------|
+| `name` | Human-readable label |
+| `prefix` | First 12 chars; safe to display |
+| `scopes` | `["resource:action", …]`; omit / empty stores `["*:*"]` for full access |
+| `expires_at` | RFC3339; `null` = never |
+| `active` | Disable without deleting |
+| `last_used_at` | Updated on each successful auth |
+
+Collection pins and scopes are independent: a key with `collection: "docs"` and omitted / empty `scopes` has full access inside `docs`, while cross-collection requests stay blocked by the pin.
+
+### Scopes
+
+Scopes use `resource:action` with `*` as a wildcard.
+
+| Scope | Grants |
+|-------|--------|
+| `collection:read` | List / get collections |
+| `collection:write` | Create / update collections |
+| `collection:delete` | Delete / truncate collections |
+| `document:upload` | Upload documents, batch upload, and upload-session create/file/complete |
+| `document:read` | List / get documents, chunks, elements, batch get/status, upload-session status, and global `/v1/documents/{id}` lookups |
+| `document:delete` | Delete documents, cancel upload sessions, and batch delete |
+| `query:read` | Run queries |
+| `chat:read` | Read generated question suggestions |
+| `chat:write` | Generate chat answers and question suggestions |
+| `vector:write` | Direct raw vector upsert |
+| `vector:delete` | Direct raw vector delete |
+| `audit:read` | Read the API-key-capable usage rollups at `/v1/usage` and `/v1/status/usage` |
+| `*:*` | Full access |
+
+A key missing a required scope returns `403` with `{"detail": "API key missing required scope: <scope>"}`.
+
+If a key is pinned to a single `collection`, that pin is enforced even on the global read helpers like `/v1/documents/{id}` by resolving the document's owning collection before returning it. Cross-collection status endpoints (`/v1/status/overview`, `/v1/status/collections`, and `/v1/status/usage`) are blocked for pinned keys.
+
+## Which endpoints accept which auth
+
+| Endpoint group | Session | API key | No auth |
+|----------------|:-------:|:-------:|:-------:|
+| `GET /health`, `GET /health/ready` | ✓ | ✓ | ✓ |
+| `GET /v1/auth/setup-status`, `POST /v1/auth/setup` (first run only) | — | — | ✓ |
+| `POST /v1/auth/login` | — | — | ✓ |
+| `/v1/auth/*` (logout, me, whoami, password) | ✓ | ✓* | — |
+| `/v1/collections`, `/v1/collections/**`, `/v1/query`, `/v1/batch/query`, `/v1/stats`, `/v1/usage`, `/v1/status/overview`, `/v1/status/collections`, `/v1/status/usage`, `/v1/embeddings/models` | ✓ | ✓ | — |
+| `/v1/admin/api-keys`, `/v1/admin/users`, `/v1/admin/settings`, `/v1/admin/vector-storage`, `/v1/admin/connectors`, `/v1/admin/webhooks`, `/v1/admin/embedding-presets`, `/v1/admin/mcp-servers` | ✓ | — | — |
+| `/v1/admin/access`, `/v1/admin/audit`, `/v1/admin/status/access`, `/v1/auth/preferences` | ✓ | — | — |
+
+\* Read-only auth endpoints (`/me`) accept either; state-changing ones (`/password`, `/logout-all`) require a session.
+
+## Password policy
+
+- Argon2id hashed at rest
+- Minimum 8 characters (enforced on `/setup`, user create, and password change)
+- Changing a password revokes every existing session for that user
+
+## Error responses
+
+| Status | Meaning |
+|--------|---------|
+| `401 Unauthorized` | No session cookie and no bearer token |
+| `403 Forbidden` | Authenticated but role or scope is insufficient |
+| `409 Conflict` | `/v1/auth/setup` called after initial admin exists |
+
+<Callout type="warn">
+Always run the API behind TLS in production. Session cookies are `Secure`-flagged only when `session_cookie_secure` is true, whether that value comes from `BIGRAG_SESSION_COOKIE_SECURE` or the instance settings API. API keys are bearer credentials that anyone holding them can use.
+</Callout>

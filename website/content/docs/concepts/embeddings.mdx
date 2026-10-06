@@ -1,0 +1,181 @@
+---
+title: Embeddings
+description: Supported embedding providers and models for Turbopuffer-backed retrieval.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+
+bigRAG supports four provider families. Each collection picks one at creation time and stores its own copy of the config, so different collections on the same instance can use different models.
+
+## Providers
+
+| Provider | Description |
+|----------|-------------|
+| `openai` | The OpenAI API |
+| `cohere` | The Cohere Embed API |
+| `voyage` | The Voyage AI Embed API (general-purpose, code, finance, and legal models) |
+| `openai_compatible` | Any HTTP endpoint that implements the OpenAI `/embeddings` shape — Ollama, vLLM, TEI / HuggingFace Text Embedding Inference, Infinity, LiteLLM, Azure OpenAI, Bedrock via LiteLLM, self-hosted models, and more |
+
+## Managed models
+
+| Provider | Model | Dimensions | Notes |
+|----------|-------|------------|-------|
+| **OpenAI** | `text-embedding-3-small` | 1536 | Default |
+| **OpenAI** | `text-embedding-3-large` | 3072 | Best OpenAI quality |
+| **OpenAI** | `text-embedding-ada-002` | 1536 | Legacy |
+| **Cohere** | `embed-english-v3.0` | 1024 | English-optimized |
+| **Cohere** | `embed-multilingual-v3.0` | 1024 | 100+ languages |
+| **Cohere** | `embed-english-light-v3.0` | 384 | Cheap, lightweight |
+| **Cohere** | `embed-multilingual-light-v3.0` | 384 | Cheap, multilingual |
+| **Voyage** | `voyage-3-large` | 1024 | Voyage flagship general-purpose |
+| **Voyage** | `voyage-3.5` | 1024 | Voyage default general-purpose |
+| **Voyage** | `voyage-3.5-lite` | 1024 | Cheap, general-purpose |
+| **Voyage** | `voyage-code-3` | 1024 | Code-tuned |
+| **Voyage** | `voyage-finance-2` | 1024 | Finance-domain |
+| **Voyage** | `voyage-law-2` | 1024 | Legal-domain |
+
+```bash
+curl http://localhost:4000/v1/embeddings/models \
+  -H "Authorization: Bearer $BIGRAG_API_KEY"
+```
+
+## Configuring a collection
+
+<Tabs items={["OpenAI", "Cohere", "Voyage", "Ollama (openai_compatible)", "vLLM / TEI / LiteLLM"]}>
+<Tab value="OpenAI">
+
+```bash
+curl -X POST http://localhost:4000/v1/collections \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "openai_collection",
+    "embedding_provider": "openai",
+    "embedding_model": "text-embedding-3-small",
+    "embedding_api_key": "sk-...",
+    "dimension": 1536
+  }'
+```
+
+</Tab>
+<Tab value="Cohere">
+
+```bash
+curl -X POST http://localhost:4000/v1/collections \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "cohere_collection",
+    "embedding_provider": "cohere",
+    "embedding_model": "embed-english-v3.0",
+    "embedding_api_key": "co-...",
+    "dimension": 1024
+  }'
+```
+
+</Tab>
+<Tab value="Voyage">
+
+```bash
+curl -X POST http://localhost:4000/v1/collections \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "voyage_collection",
+    "embedding_provider": "voyage",
+    "embedding_model": "voyage-3.5",
+    "embedding_api_key": "pa-...",
+    "dimension": 1024
+  }'
+```
+
+`voyage-3-large`, `voyage-3.5`, `voyage-3.5-lite`, and `voyage-code-3` accept Matryoshka dimensions (256, 512, 1024, 2048). Pass `dimension` accordingly. `voyage-finance-2` and `voyage-law-2` are fixed at 1024.
+
+</Tab>
+<Tab value="Ollama (openai_compatible)">
+
+```bash
+curl -X POST http://localhost:4000/v1/collections \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "local_collection",
+    "embedding_provider": "openai_compatible",
+    "embedding_model": "nomic-embed-text",
+    "embedding_base_url": "http://ollama.internal:11434/v1",
+    "embedding_api_key": "ollama",
+    "dimension": 768
+  }'
+```
+
+</Tab>
+<Tab value="vLLM / TEI / LiteLLM">
+
+```bash
+curl -X POST http://localhost:4000/v1/collections \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "vllm_collection",
+    "embedding_provider": "openai_compatible",
+    "embedding_model": "BAAI/bge-large-en-v1.5",
+    "embedding_base_url": "http://vllm.internal:8000/v1",
+    "embedding_api_key": "dummy",
+    "dimension": 1024
+  }'
+```
+
+</Tab>
+</Tabs>
+
+`embedding_api_key` is always required — for self-hosted gateways that don't authenticate, pass any non-empty string.
+
+### OpenAI-compatible endpoints in practice
+
+Any gateway that speaks the OpenAI `/embeddings` shape works:
+
+| Tool | Typical `embedding_base_url` |
+|------|------------------------------|
+| Ollama | `http://ollama:11434/v1` |
+| vLLM | `http://vllm:8000/v1` |
+| TEI (HuggingFace) | `http://tei:80/v1` |
+| Infinity | `http://infinity:7997/v1` |
+| LiteLLM proxy | `http://litellm:4000/v1` |
+| Azure OpenAI (via LiteLLM) | `http://litellm:4000/v1` |
+| Bedrock (via LiteLLM) | `http://litellm:4000/v1` |
+
+## How embedding works
+
+1. Text extraction (via Docling) splits the document into pages and paragraphs.
+2. The chunker produces chunks according to the collection's `chunk_size`, `chunk_overlap`, and `chunk_strategy`.
+3. Each chunk's SHA-256 content hash is looked up in the persistent `embedding_cache`. Hits are reused; misses are sent to the provider.
+4. New vectors are batched at `BIGRAG_INGESTION_BATCH_SIZE` and written to the collection's Turbopuffer namespace.
+5. Queries embed the same way, with short-lived Redis caching for repeated query embeddings.
+
+The cache key is `(content_hash, provider, model, dimension)`. A new collection using a different model starts cold for that model while previous cache entries remain available to collections still using the old model.
+
+Persistent embedding-cache rows are encrypted by default with `BIGRAG_MASTER_KEY`. Set `embedding_cache_mode` to `disabled` in `/settings` to prefer provider cost over storing reusable vectors. The default retention window is 30 days after last use; admins can purge the cache from the Security settings tab.
+
+Redis query caches are also encrypted when `BIGRAG_MASTER_KEY` is configured. The default query embedding TTL is 300 seconds; set `query_embedding_cache_ttl` to `0` to disable it.
+
+## Concurrency & throughput
+
+Embedding requests are guarded by a Redis-backed adaptive limiter with `embedding_concurrency` as its ceiling (`BIGRAG_EMBEDDING_CONCURRENCY`, default 8):
+
+- Raise it for high-QPS providers.
+- Lower it if your embedding provider throttles requests.
+
+When a provider returns a rate limit with `Retry-After`, `retry-after-ms`, or a message such as `Please try again in 37ms`, ingestion records a short Redis cooldown for that provider/model, waits for the hint, and retries the same batch without consuming the generic transient retry budget. Repeated rate limits are capped per batch, so sustained TPM pressure should be handled by lowering concurrency or batch size.
+
+Changing `embedding_concurrency` in `/settings` resets the local and Redis limiter state so workers use the new ceiling immediately.
+
+Token counting uses `tiktoken` where the provider ships a tokenizer and falls back to a 4-character-per-token heuristic otherwise.
+
+## Reranking
+
+Reranking is a separate concern: enable `reranking_enabled` on a collection to add a Cohere cross-encoder pass after retrieval. It's configured independently (different key, different model) because it often makes sense to embed with a cheap local model and rerank with a strong managed one.
+
+<Callout type="warn">
+The embedding provider, model, dimension, and `embedding_base_url` **cannot** be changed after a collection is created — chunk vectors are only meaningful under the model that produced them. If you need to switch models, create a new collection and re-ingest or migrate the source documents into it.
+</Callout>

@@ -1,0 +1,52 @@
+---
+title: User Preferences
+description: Per-user JSON blob for admin UI state.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Base path: `/v1/auth/preferences` — Session-only.
+
+A JSON scratch-pad scoped to the logged-in user. The admin UI uses it to persist sidebar state, default collection filter, preferred search mode, and similar client-side prefs. The server only interprets documented sensitive paths so it can encrypt and redact secrets.
+
+## Get Preferences
+
+```
+GET /v1/auth/preferences
+```
+
+**Response** `200`:
+
+```json
+{
+  "data": {
+    "sidebar_collapsed": false,
+    "default_collection": "knowledge_base",
+    "chat": { "search_mode": "hybrid", "top_k": 10 }
+  }
+}
+```
+
+New users return `{"data": {}}`.
+
+## Update Preferences
+
+```
+PUT /v1/auth/preferences
+```
+
+Deep-merges the request body into the stored preferences. Keys not present in the request are preserved. Ordinary keys sent as `null` are stored as `null`; documented sensitive paths such as `chat.openai_key` are cleared when sent as `null`.
+
+```json
+{ "data": { "default_collection": "knowledge_base" } }
+```
+
+The body may be either `{"data": {...}}` or a bare object — both are accepted.
+
+**Response** `200`: echoes the merged public `data`.
+
+Sensitive paths such as `chat.openai_key` are Fernet-encrypted at rest when `BIGRAG_MASTER_KEY` is configured. Preference responses do not return the key; they return `chat.has_openai_key` instead.
+
+<Callout type="info">
+  There is no size validation beyond the standard request-body limit, but keep payloads small (&lt;64 KB) — this isn't a document store.
+</Callout>

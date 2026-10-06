@@ -1,0 +1,89 @@
+---
+title: Migrate from Pinecone
+description: Move an existing Pinecone index to bigRAG with one importer script — API mapping, chunking considerations, and a reusable migration pattern.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+bigRAG's data model is a superset of Pinecone's — every Pinecone concept has a direct equivalent, plus a few extras (persistent chunk text, ingestion pipeline, webhooks). Migrating is primarily a data copy and an API-layer search-and-replace.
+
+## Concept mapping
+
+| Pinecone | bigRAG |
+| --- | --- |
+| Index | Collection |
+| Namespace | Metadata field `namespace` (set `tenant_field` when every upload/query must include it) |
+| Vector (id, values, metadata) | Chunk (`id`, `embedding`, `metadata`) |
+| `upsert` | `POST /v1/collections/{name}/vectors/upsert` |
+| `query(vector, topK, filter)` | `POST /v1/collections/{name}/query` |
+| `delete(ids)` | `POST /v1/collections/{name}/vectors/delete` |
+| `describe_index_stats` | `GET /v1/collections/{name}/stats` |
+
+<Callout type="info">
+bigRAG stores chunk **text** alongside the vector — so results carry the source passage natively. Pinecone only keeps metadata; if your pipeline previously embedded text elsewhere, you can drop that storage.
+</Callout>
+
+## One-shot importer script
+
+```python
+# examples/migrate_from_pinecone.py
+import asyncio
+
+from pinecone import Pinecone
+from bigrag import BigRAG
+
+async def main():
+    pc = Pinecone(api_key="pcsk_...")
+    source = pc.Index("prod-docs")
+
+    async with BigRAG(api_key="bigrag_sk_...") as client:
+        await client.collections.create({
+            "name": "prod_docs",
+            "embedding_provider": "openai",
+            "embedding_model": "text-embedding-3-small",
+            "dimension": 1536,
+        })
+
+        batch = 100
+        cursor = None
+        while True:
+            page = source.list_paginated(limit=batch, pagination_token=cursor)
+            ids = [v.id for v in page.vectors]
+            if not ids:
+                break
+            fetched = source.fetch(ids=ids)
+            vectors = [
+                {
+                    "id": v.id,
+                    "embedding": v.values,
+                    "text": v.metadata.get("text", ""),
+                    "metadata": {k: v for k, v in v.metadata.items() if k != "text"},
+                }
+                for v in fetched.vectors.values()
+            ]
+            await client.vectors.upsert("prod_docs", vectors)
+            cursor = page.pagination.next if page.pagination else None
+            if not cursor:
+                break
+
+asyncio.run(main())
+```
+
+## Two migration strategies
+
+**Lift and shift** — the script above copies vectors as-is. Fastest, keeps existing retrieval quality identical. Good when you're just moving off Pinecone's hosting cost.
+
+**Re-ingest from source** — upload the original documents through `POST /v1/collections/{name}/documents`. Slower (you pay the embedding bill again) but unlocks features Pinecone doesn't have: citation provenance (`page_no`, `char_start`), the persistent embedding cache, and Docling-parsed tables and images. Recommended if you're in the middle of a chunking rethink anyway.
+
+## API differences to watch
+
+- **Filters stay as JSON objects.** Pass a dict like `{"department": "sales"}` and bigRAG translates it into Turbopuffer filters.
+- **Namespaces → metadata filters.** Pinecone's `namespace="docs"` becomes `metadata.namespace = "docs"`. Set `tenant_field: "namespace"` on the collection when that field should become required on uploads, raw vector upserts, queries, and chat requests.
+- **Hybrid search is built-in.** `search_mode: "hybrid"` runs keyword BM25 + vector search in parallel and fuses with reciprocal rank fusion. No separate "sparse" vectors to maintain.
+
+## Cut-over
+
+1. Run the importer with `BATCH=100` overnight.
+2. Update your application's search code to hit bigRAG. Filters, top_k, and metadata pass through.
+3. Dual-read for 24h (query both, log discrepancies) to verify parity.
+4. Flip reads fully to bigRAG, stop writes to Pinecone, and once dust settles, delete the Pinecone index.

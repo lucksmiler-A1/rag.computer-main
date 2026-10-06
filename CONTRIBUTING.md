@@ -1,0 +1,135 @@
+# Contributing to bigRAG
+
+Thank you for your interest in contributing to bigRAG. This guide will help you get started.
+
+## Getting Started
+
+### Prerequisites
+
+- **Python 3.12+** with [uv](https://docs.astral.sh/uv/)
+- **Node.js 20+** with [pnpm](https://pnpm.io/) (via corepack)
+- **Docker** and **Docker Compose** — for Postgres and Redis
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/bigint/rag.computer.git
+cd rag.computer
+
+# Start everything (backend + website + infrastructure)
+./dev.sh
+
+# Or start only specific services
+./dev.sh --backend     # Docker infra + Python API
+./dev.sh --website     # Docs site only
+./dev.sh --infra       # Docker services only
+./dev.sh --no-install  # Skip dependency installation (faster restart)
+```
+
+Or manually:
+
+```bash
+# Start infrastructure
+docker compose up postgres redis -d
+
+# Set up the Python backend
+cd api
+uv sync
+uv run python -m bigrag.main
+```
+
+### Project Structure
+
+```
+bigrag/
+├── api/                   # Python/FastAPI backend
+│   ├── bigrag/
+│   │   ├── main.py        # App factory + lifespan
+│   │   ├── deps.py        # FastAPI dependency injection
+│   │   ├── config.py      # Settings
+│   │   ├── db/            # SQLAlchemy engine, session, ORM models, bootstrap
+│   │   ├── alembic/       # Schema migrations
+│   │   ├── models/        # Pydantic request/response models
+│   │   ├── services/      # Business logic (embedding, ingestion, retrieval, webhooks)
+│   │   ├── routers/       # API route handlers
+│   │   └── middleware/    # Auth middleware
+│   ├── alembic/
+│   └── pyproject.toml
+├── sdks/typescript/       # TypeScript SDK (@bigrag/client)
+├── sdks/python/           # Python SDK (bigrag)
+├── app/                   # Admin UI (TanStack Router + React)
+├── website/               # Docs site (Next.js + Fumadocs)
+├── docker-compose.yml     # Full stack (Postgres, Redis, API)
+├── biome.jsonc            # Biome linting config for TypeScript
+├── pnpm-workspace.yaml    # pnpm workspace config
+├── dev.sh                 # One-command dev setup
+└── bigrag.toml            # Backend configuration
+```
+
+## Making Changes
+
+### Branching
+
+- Create a feature branch from `main`: `git checkout -b feat/my-feature`
+- Use conventional commit prefixes: `feat/`, `fix/`, `refactor/`, `docs/`
+
+### Coding Standards
+
+- **Python**: Run `ruff check . && ruff format .` before committing
+- **TypeScript**: Run `pnpm lint` from the root (uses Biome)
+- **Type hints**: Use type annotations on all public functions
+
+### Verifying Changes
+
+```bash
+pnpm check
+```
+
+`pnpm check` runs Biome, Ruff, workspace typechecks, app / SDK / docs builds, and a Python backend compile pass. Use targeted package commands while iterating, then run the root check before opening a PR.
+
+### Commit Messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+feat: add hybrid search fusion scoring
+fix: correct chunking overlap logic
+refactor: simplify embedding model registry
+docs: update API reference for query endpoint
+chore: update ingestion pipeline fixtures
+```
+
+### Release Versioning
+
+bigRAG release artifacts use [CalVer](https://calver.org/) with the `YYYY.M.D` scheme, without zero-padding month or day so npm and Python package versions stay compatible. A release on May 23, 2026 is `2026.5.23`.
+
+When cutting a coordinated platform release, keep the API package, SDK packages, SDK user-agent constants, Docker image tags, and docs examples on the same CalVer version. SDK-only releases can ship independently from the API, admin UI, and docs packages.
+
+## Pull Request Process
+
+1. **Open an issue first** for significant changes to discuss the approach
+2. **Create a branch** from `main` with a descriptive name
+3. **Make your changes** following the coding standards above
+4. **Run the relevant lint, typecheck, build, and runtime smoke checks** locally
+5. **Push your branch** and open a pull request against `main`
+6. **Address review feedback** promptly
+
+### PR Requirements
+
+- All CI checks must pass, including the root `pnpm check` job
+- At least one maintainer approval
+- No merge conflicts with `main`
+
+## Reporting Bugs
+
+Open an issue with:
+
+- bigRAG version and how you installed it (Docker, pip, source)
+- Steps to reproduce
+- Expected vs actual behavior
+- Relevant logs (run `python -m bigrag.main --log-level debug` for detailed output)
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the MIT License.

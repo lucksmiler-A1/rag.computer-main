@@ -1,0 +1,135 @@
+type OptionalCollectionParams = {
+  readonly collection?: string;
+};
+
+type S3SyncJobsParams = {
+  readonly collection?: string;
+  readonly limit?: number;
+  readonly sourceId?: string;
+};
+
+type WindowDaysParams = {
+  readonly windowDays: number;
+};
+
+type CollectionNameParams = {
+  readonly name: string;
+};
+
+type ChatQuestionsParams = {
+  readonly collection: string;
+};
+
+type DocumentParams = {
+  readonly collection: string;
+  readonly id: string;
+};
+
+type DocumentListParams = {
+  readonly collection: string;
+  readonly status?: string;
+  readonly q?: string;
+  readonly sort?: string;
+  readonly order?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+};
+
+type UploadSessionParams = {
+  readonly collection: string;
+  readonly id: string | null;
+};
+
+type AuditListParams = {
+  readonly action?: string;
+  readonly limit: number;
+  readonly offset: number;
+  readonly resourceType?: string;
+};
+
+export const queryKeys = {
+  auth: {
+    all: () => ["auth"] as const,
+    setupStatus: () => ["auth", "setup-status"] as const,
+    session: () => ["auth", "session"] as const,
+  },
+  apiKeys: () => ["api-keys"] as const,
+  access: {
+    logs: (filters: Record<string, unknown>) => ["access", "logs", filters] as const,
+    overview: ({ windowDays }: WindowDaysParams) => ["access", "overview", { windowDays }] as const,
+  },
+  audit: {
+    list: ({ action, limit, offset, resourceType }: AuditListParams) =>
+      ["audit", "list", { action, limit, offset, resourceType }] as const,
+  },
+  mcpServers: () => ["mcp-servers"] as const,
+  webhooks: () => ["webhooks"] as const,
+  embeddingPresets: () => ["embedding-presets"] as const,
+  preferences: () => ["preferences"] as const,
+  instanceSettings: () => ["instance-settings"] as const,
+  connectors: {
+    s3Sources: ({ collection }: OptionalCollectionParams = {}) =>
+      ["connectors", "s3", "sources", { collection: collection ?? "all" }] as const,
+    s3SyncJobsAll: () => ["connectors", "s3", "sync-jobs"] as const,
+    s3SyncJobs: ({ collection, limit, sourceId }: S3SyncJobsParams = {}) =>
+      [
+        "connectors",
+        "s3",
+        "sync-jobs",
+        { collection: collection ?? "all", limit: limit ?? "default", sourceId: sourceId ?? "all" },
+      ] as const,
+  },
+  chat: {
+    questions: ({ collection }: ChatQuestionsParams) =>
+      ["chat", "questions", { collection }] as const,
+  },
+  collections: {
+    all: () => ["collections"] as const,
+    one: ({ name }: CollectionNameParams) => ["collections", "detail", { name }] as const,
+    stats: ({ name }: CollectionNameParams) => ["collections", "stats", { name }] as const,
+  },
+  documents: {
+    lists: () => ["documents", "list"] as const,
+    list: ({ collection, status, q, sort, order, limit, offset }: DocumentListParams) =>
+      [
+        "documents",
+        "list",
+        {
+          collection,
+          ...(status ? { status } : {}),
+          ...(q ? { q } : {}),
+          ...(sort ? { sort } : {}),
+          ...(order ? { order } : {}),
+          ...(limit === undefined ? {} : { limit }),
+          ...(offset === undefined ? {} : { offset }),
+        },
+      ] as const,
+    infiniteList: ({ collection, status, q, sort, order, limit }: DocumentListParams) =>
+      [
+        "documents",
+        "list",
+        "infinite",
+        {
+          collection,
+          ...(status ? { status } : {}),
+          ...(q ? { q } : {}),
+          ...(sort ? { sort } : {}),
+          ...(order ? { order } : {}),
+          ...(limit === undefined ? {} : { limit }),
+        },
+      ] as const,
+    one: ({ collection, id }: DocumentParams) =>
+      ["documents", "detail", { collection, id }] as const,
+    chunks: ({ collection, id }: DocumentParams) =>
+      ["documents", "chunks", { collection, id }] as const,
+    uploadSession: ({ collection, id }: UploadSessionParams) =>
+      ["documents", "upload-session", { collection, id }] as const,
+  },
+  platform: {
+    overviewStatus: () => ["status", "overview"] as const,
+    stats: () => ["platform", "stats"] as const,
+    readiness: () => ["platform", "readiness"] as const,
+    embeddingModels: () => ["platform", "embedding-models"] as const,
+  },
+  usage: ({ windowDays }: WindowDaysParams) => ["usage", { windowDays }] as const,
+} as const;

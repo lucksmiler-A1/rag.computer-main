@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --dev
+        working-directory: api
+
+      - name: Ruff check
+        run: uv run ruff check . && uv run ruff format --check .
+        working-directory: api
+
+      - name: Ruff check Python SDK
+        run: uv run ruff check ../sdks/python/src && uv run ruff format --check ../sdks/python/src
+        working-directory: api
+
+      - uses: ./.github/actions/setup-node-pnpm
+
+      - name: Biome check
+        run: pnpm exec biome check .
+
+  repo-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+
+      - name: Install API dependencies
+        run: uv sync --dev
+        working-directory: api
+
+      - uses: ./.github/actions/setup-node-pnpm
+
+      - name: Run root check
+        run: pnpm check
+
+  sdk-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-node-pnpm
+      - name: Type check
+        run: pnpm typecheck
+        working-directory: sdks/typescript
+      - name: Build
+        run: pnpm build
+        working-directory: sdks/typescript
+
+  python-sdk-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: sdks/python/uv.lock
+
+      - name: Install dependencies
+        run: uv sync
+        working-directory: sdks/python
+
+      - name: Build package
+        run: uv build
+        working-directory: sdks/python
+
+  website-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-node-pnpm
+      - name: Type check
+        run: pnpm typecheck
+        working-directory: website
+      - name: Build
+        run: pnpm build
+        working-directory: website
+
+  app-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-node-pnpm
+      - name: Type check
+        run: pnpm typecheck
+        working-directory: app
+      - name: Build
+        run: pnpm build
+        working-directory: app

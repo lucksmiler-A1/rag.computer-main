@@ -1,0 +1,152 @@
+---
+title: Search
+description: Turbopuffer-backed semantic, keyword, and hybrid search.
+---
+
+bigRAG exposes three search modes on Turbopuffer and an optional rerank pass. Pick a mode, set `top_k` and filters, and enable reranking only when a collection is configured for it.
+
+## Modes
+
+| Mode | Description |
+|------|-------------|
+| `semantic` | Default. Cosine similarity against vectors stored in Turbopuffer. |
+| `keyword` | Turbopuffer BM25 full-text matching over stored chunk text. No embedding involved. Quoted identifiers and trailing punctuation are normalized into searchable lexical tokens. |
+| `hybrid` | Runs Turbopuffer ANN and BM25 queries in parallel, then merges with reciprocal rank fusion. |
+
+### Semantic
+
+```bash
+curl -X POST http://localhost:4000/v1/collections/docs/query \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the main findings about climate change?"}'
+```
+
+Best for natural language questions and conceptual queries.
+
+### Keyword
+
+```bash
+curl -X POST http://localhost:4000/v1/collections/docs/query \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "ERR-4021", "search_mode": "keyword"}'
+```
+
+Best for exact terms, product codes, IDs, proper nouns.
+
+### Hybrid
+
+```bash
+curl -X POST http://localhost:4000/v1/collections/docs/query \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "error code ERR-4021 authentication", "search_mode": "hybrid"}'
+```
+
+Best for queries that mix natural language with specific terms.
+
+## Turbopuffer retrieval layer
+
+Each bigRAG collection maps to one Turbopuffer namespace. Document chunks are written with vectors, chunk text, metadata, document provenance, and backend-safe IDs, so semantic, keyword, hybrid, filter, export, truncate, and delete operations stay scoped to the collection.
+
+## Query parameters
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `query` | string | — | Required query text |
+| `top_k` | integer | Collection default | 1–200 |
+| `filters` | object | — | Metadata filters — see below |
+| `min_score` | float | Collection default | Drop hits below this score |
+| `search_mode` | string | Collection default | `semantic`, `keyword`, `hybrid` |
+| `rerank` | boolean | Collection setting | Force Cohere rerank on/off |
+| `skip_cache` | boolean | `false` | Bypass Redis query-result and query-embedding caches for one request |
+
+## Filters
+
+Pass a plain value for exact match, or use operators for more control:
+
+```json
+{ "filters": { "author": "Smith", "year": 2026 } }
+```
+
+| Operator | Description | Value Type |
+|----------|-------------|------------|
+| `$eq` | Equal | string, number, boolean |
+| `$ne` | Not equal | string, number, boolean |
+| `$gt` | Greater than | number |
+| `$gte` | Greater than or equal | number |
+| `$lt` | Less than | number |
+| `$lte` | Less than or equal | number |
+| `$in` | In list | array of strings or numbers |
+
+```json
+{
+  "filters": {
+    "year": { "$gte": 2024 },
+    "status": { "$in": ["published", "preprint"] },
+    "score": { "$gt": 0.8 }
+  }
+}
+```
+
+Multiple filters are combined with AND. When a collection was created with `tenant_field`, bigRAG configures that field for backend filtering. Tenant-scoped API keys have their tenant filter applied automatically on query and chat requests. Session admins can pass explicit tenant filters. Unscoped API keys without a tenant cannot access tenant-guarded collections and receive `400`.
+
+Keyword search uses Turbopuffer BM25 over the chunk `text` field. Hybrid search runs Turbopuffer ANN and BM25 queries, then merges the two result sets with normalized reciprocal rank fusion before optional reranking.
+
+## Reranking
+
+When `reranking_enabled` is set on a collection and a Cohere key is available, retrieved hits are re-scored by a Cohere cross-encoder (`rerank-v3.5` by default). Save `reranking_api_key` on the collection, or use a Cohere embedding preset/key if the collection itself embeds with Cohere. Queries skip the rerank pass instead of failing when reranking is enabled but no usable Cohere key is configured. Override per query with `"rerank": false` to measure lift, or `"rerank": true` on a collection that has it disabled.
+
+## Timings
+
+Every response includes a `timings` breakdown:
+
+```json
+"timings": {
+  "embed_ms": 18.2,
+  "search_ms": 12.4,
+  "rerank_ms": 31.5,
+  "cache_ms": 0,
+  "total_ms": 62.8,
+  "cache_hit": false
+}
+```
+
+When a query-result cache entry is reused, `cache_hit` is `true`, `cache_ms` contains the Redis lookup time, and the embed/search/rerank timings stay at zero instead of replaying the original uncached request's latencies. Set `"skip_cache": true` to force a live retrieval for one request without reading or writing Redis query caches.
+
+## Multi-Collection Query
+
+```bash
+curl -X POST http://localhost:4000/v1/query \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"machine learning","collections":["docs","papers"],"top_k":20}'
+```
+
+Each result includes a `collection` field. Useful when you've split content across collections by domain, tenant, or embedding model and want one unified answer.
+
+## Batch Query
+
+Up to 20 independent queries, executed in parallel:
+
+```bash
+curl -X POST http://localhost:4000/v1/batch/query \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "queries": [
+      {"collection": "docs", "query": "authentication", "top_k": 5},
+      {"collection": "papers", "query": "neural networks", "top_k": 10, "search_mode": "hybrid"}
+    ]
+  }'
+```
+
+## Analytics
+
+```bash
+curl http://localhost:4000/v1/collections/docs/analytics \
+  -H "Authorization: Bearer $BIGRAG_API_KEY"
+```
+
+Returns 24h / 7d / 30d aggregates — query count, average latency, average score, top queries. Cached for five minutes.

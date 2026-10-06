@@ -1,0 +1,402 @@
+---
+title: TypeScript SDK
+description: TypeScript client for Node.js, browsers, Deno, Bun, and edge runtimes.
+---
+
+import { Tabs, Tab } from "fumadocs-ui/components/tabs";
+import { Callout } from "fumadocs-ui/components/callout";
+import { Accordions, Accordion } from "fumadocs-ui/components/accordion";
+
+## Installation
+
+```bash
+npm install @bigrag/client
+```
+
+Works in Node.js 18+, browsers, Deno, Bun, and edge runtimes.
+Published npm releases use CalVer (`YYYY.M.D`), for example `@bigrag/client@2026.5.23`.
+
+Browser applications that only need SDK error classes and shared response types can import the browser-safe subpath:
+
+```typescript
+import { APIError, type Document } from "@bigrag/client/browser";
+```
+
+The main `@bigrag/client` entry includes Node file-path upload support. Use the `/browser` subpath for admin UI code or other browser bundles that should not load Node upload helpers.
+
+## Quick Start
+
+```typescript
+import { BigRAG } from "@bigrag/client";
+
+const client = new BigRAG({
+  apiKey: process.env.BIGRAG_API_KEY!, // bigrag_sk_... minted via /v1/admin/api-keys
+  baseUrl: "http://localhost:4000",
+});
+
+// Create a collection
+const collection = await client.collections.create({
+  name: "knowledge_base",
+  description: "Company docs",
+  chunk_size: 512,
+});
+
+// Upload a document
+const doc = await client.documents.upload("knowledge_base", file);
+
+// Poll processing status
+let current = doc;
+while (current.status === "pending" || current.status === "processing") {
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  current = await client.documents.get("knowledge_base", doc.id);
+  console.log(current.progress?.message ?? current.status);
+}
+
+// Query
+const { results } = await client.queries.query("knowledge_base", {
+  query: "What is the PTO policy?",
+  top_k: 5,
+});
+```
+
+The client follows a Stripe-style **resource namespace** layout: `client.collections`, `client.documents`, `client.chat`, `client.queries`, `client.vectors`, `client.webhooks`, `client.auth`, `client.admin`, `client.connectors`, and `client.evaluations`.
+
+## Configuration
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `apiKey` | `BIGRAG_API_KEY` env var | `bigrag_sk_…` key minted at [`/v1/admin/api-keys`](/docs/api-reference/api-keys). Omit for session-cookie auth (browser contexts). |
+| `baseUrl` | `http://localhost:4000` | bigRAG server URL |
+| `timeout` | `120000` | Request timeout in ms |
+| `maxRetries` | `2` | Max retries on 5xx, infrastructure 429 responses, network errors |
+| `fetch` | `globalThis.fetch` | Custom fetch implementation |
+| `autoIdempotencyKey` | `true` | Adds an `Idempotency-Key` to mutating requests unless an explicit key is supplied or disabled |
+
+## Collections
+
+```typescript
+client.collections.list({ name?, limit?, offset? })
+client.collections.listAll({ name?, limit? })  // AsyncGenerator that pages through every collection
+client.collections.create({
+  name,
+  description?,
+  embedding_preset_id?,
+  embedding_provider?,      // "openai" | "cohere" | "voyage" | "openai_compatible"
+  embedding_model?,
+  embedding_api_key?,
+  embedding_base_url?,
+  dimension?,
+  chunk_size?, chunk_overlap?, chunk_strategy?,    // "paragraph" | "recursive"
+  tenant_field?,            // metadata key required for tenant filtering
+  metadata_schema?,         // JSON Schema
+  reranking_enabled?, reranking_model?, reranking_api_key?,
+  multimodal_enabled?, multimodal_enrichment_enabled?,
+  default_top_k?, default_min_score?, default_search_mode?,
+  metadata?,
+})
+client.collections.get(name)
+client.collections.stats(name)
+client.collections.update(name, {
+  description?, metadata?, embedding_api_key?,
+  chunk_strategy?, metadata_schema?,
+  reranking_enabled?, reranking_model?, reranking_api_key?,
+  multimodal_enabled?, multimodal_enrichment_enabled?,
+  default_top_k?, default_min_score?, default_search_mode?,
+})
+client.collections.delete(name)
+client.collections.truncate(name)        // delete all documents, keep the collection
+client.collections.analytics(name)
+```
+
+<Callout type="info">
+  For update calls, send `embedding_api_key: null` or `reranking_api_key: null` to clear the stored key.
+</Callout>
+
+## Documents
+
+```typescript
+client.documents.upload(collection, file, metadata?)
+client.documents.batchUpload(collection, files, metadata?)
+client.documents.list(collection, { q?, status?, sort?, order?, limit?, offset? })
+client.documents.listAll(collection, { q?, status?, sort?, order?, limit? })  // AsyncGenerator
+client.documents.get(collection, documentId)
+client.documents.delete(collection, documentId)
+client.documents.getChunks(collection, documentId, { limit?, offset? }?)
+client.documents.getElements(collection, documentId, { limit?, offset? }?)
+```
+
+File uploads accept `File`, `Blob`, `Buffer`, `Uint8Array`, or `{ path: string; name?: string }`.
+
+<Accordions type="multiple">
+
+<Accordion title="Upload sessions">
+
+```typescript
+client.documents.createUploadSession(collection, { total_files, total_bytes, metadata? })
+client.documents.uploadSessionFile(collection, sessionId, file, { clientItemId?, filename? })
+client.documents.getUploadSession(collection, sessionId)
+client.documents.completeUploadSession(collection, sessionId)
+client.documents.cancelUploadSession(collection, sessionId)
+```
+
+</Accordion>
+
+<Accordion title="Batch operations">
+
+```typescript
+client.documents.batchGetStatus(collection, documentIds)
+client.documents.batchGet(collection, documentIds)
+client.documents.batchDelete(collection, documentIds)
+```
+
+`batchDelete` accepts large document ID lists; the API chunks the delete work server-side.
+
+</Accordion>
+
+<Accordion title="Global document access (without collection scope)">
+
+```typescript
+client.documents.getById(documentId)
+client.documents.getChunksById(documentId, { limit?, offset? }?)
+```
+
+</Accordion>
+
+</Accordions>
+
+## Chat
+
+```typescript
+const answer = await client.chat.create({
+  collection: "docs",
+  message: "What is the PTO policy?",
+  top_k: 8,
+  search_mode: "hybrid",
+});
+console.log(answer.assistant_message.content);
+
+const suggestions = await client.chat.getQuestionSuggestions("docs");
+const fresh = await client.chat.generateQuestionSuggestions({ collection: "docs" });
+
+for await (const event of client.chat.stream({
+  collection: "docs",
+  message: "Answer with citations",
+})) {
+  if (event.event === "delta") process.stdout.write(event.data.delta);
+}
+```
+
+## Queries
+
+```typescript
+client.queries.query(collection, {
+  query,
+  top_k?, filters?, min_score?,
+  search_mode?,             // "semantic" | "keyword" | "hybrid"
+  rerank?,
+  skip_cache?,
+  multimodal?,
+})
+// Response exposes: results, query, collection, total, timings
+// Multimodal collections include result.multimodal_elements
+
+client.queries.multiQuery({
+  query, collections, top_k?, filters?, min_score?, search_mode?, rerank?, skip_cache?, multimodal?
+})
+client.queries.batchQuery({
+  queries: [{ collection, query, top_k?, search_mode?, skip_cache? }, ...]
+})
+```
+
+## Vectors
+
+```typescript
+client.vectors.upsert(collection, vectors)
+client.vectors.delete(collection, ids)
+```
+
+## Webhooks
+
+```typescript
+client.webhooks.create({ url, events, collections? })
+client.webhooks.list({ limit?, offset? })
+client.webhooks.get(id)
+client.webhooks.update(id, { url?, events?, collections?, active? })
+client.webhooks.delete(id)
+client.webhooks.listDeliveries(id, { limit?, offset? })
+client.webhooks.test(id)
+client.webhooks.replayDelivery(id, deliveryId)
+```
+
+Webhook events cover collection and connector sync data-operation changes. Examples: `collection.truncated` and `connector.sync.failed`.
+
+<Callout type="warn">
+  Webhook management calls `/v1/admin/webhooks` and requires session-cookie admin auth. API-key clients receive `403`.
+</Callout>
+
+## Auth
+
+```typescript
+client.auth.setupStatus()
+client.auth.setup({ email, password, display_name? })
+client.auth.login({ email, password })
+client.auth.logout()
+client.auth.logoutAll()
+client.auth.me()
+client.auth.whoami()
+client.auth.changePassword({ current_password, new_password })
+client.auth.getPreferences()
+client.auth.updatePreferences({ theme: "dark" })
+```
+
+## Admin
+
+```typescript
+client.admin.users.list({ limit?, offset? })
+client.admin.users.create({ email, password, display_name?, role? })
+client.admin.users.update(userId, { email?, display_name?, role?, password? })
+client.admin.users.delete(userId)
+
+client.admin.apiKeys.list({ limit?, offset? })
+client.admin.apiKeys.create({ name, expires_at?, scopes?, collection? })
+client.admin.apiKeys.update(keyId, { name?, active?, expires_at?, scopes?, collection? })
+client.admin.apiKeys.rotate(keyId)
+client.admin.apiKeys.delete(keyId)
+
+client.admin.access.logs({ action?, actorId?, collection?, statusFamily?, success?, limit?, offset? })
+client.admin.access.overview({ windowDays? })
+client.admin.audit.list({ action?, actorId?, resourceType?, limit?, offset? })
+
+client.admin.settings.list()
+client.admin.settings.test({ values })
+client.admin.settings.update({ values })
+client.admin.settings.reset({ keys })
+client.admin.settings.purgeEmbeddingCache()
+
+client.admin.vectorStorage.overview()
+
+client.admin.embeddingPresets.list({ limit?, offset? })
+client.admin.embeddingPresets.create({ name, provider, model, api_key, base_url?, dimension })
+client.admin.embeddingPresets.update(presetId, { name?, provider?, model?, api_key?, base_url?, dimension? })
+client.admin.embeddingPresets.test({ provider, model, api_key?, base_url? })
+client.admin.embeddingPresets.testSaved(presetId)
+client.admin.embeddingPresets.delete(presetId)
+
+client.admin.mcpServers.list()
+client.admin.mcpServers.create({ title, server_name, collection? })
+client.admin.mcpServers.update(serverId, { title?, server_name?, collection? })
+client.admin.mcpServers.rotate(serverId)
+client.admin.mcpServers.delete(serverId)
+```
+
+<Callout type="info">
+  Admin endpoints (`/v1/admin/*` and most of `/v1/auth/*`) are session-only. API keys remain the right fit for read/query/ingest workloads.
+</Callout>
+
+## Connectors
+
+```typescript
+client.connectors.s3.sources({ collection? })
+client.connectors.s3.createSource({
+  collection_name,
+  bucket,
+  prefix?,
+  region?,
+  endpoint_url?,
+  force_path_style?,
+  access_key_id,
+  secret_access_key,
+  session_token?,
+  metadata?,
+  schedule_enabled?,
+  sync_interval_hours?,
+})
+client.connectors.s3.updateSource(sourceId, {
+  bucket?,
+  prefix?,
+  region?,
+  endpoint_url?,
+  force_path_style?,
+  access_key_id?,
+  secret_access_key?,
+  session_token?,
+  metadata?,
+  schedule_enabled?,
+  sync_interval_hours?,
+})
+client.connectors.s3.deleteSource(sourceId)
+client.connectors.s3.syncSource(sourceId)
+client.connectors.s3.syncJobs({ collection?, sourceId?, limit? })
+```
+
+For Cloudflare R2, set `endpoint_url` to the R2 S3 API endpoint and omit `region` or use `auto`.
+
+## Evaluations
+
+```typescript
+client.evaluations.run({
+  collection: "docs",
+  cases: [{ query: "What is RAG?", relevant_ids: ["doc-id"] }],
+  top_k: 10,
+  search_mode: "hybrid",
+})
+```
+
+## Platform
+
+```typescript
+client.health()                          // GET /health
+client.readiness()                       // GET /health/ready
+client.getStats()                        // GET /v1/stats
+client.listEmbeddingModels()             // GET /v1/embeddings/models
+client.getUsage({ windowDays? })          // GET /v1/usage
+client.getOverviewStatus()               // GET /v1/status/overview
+client.getCollectionsStatus()            // GET /v1/status/collections
+client.getUsageStatus({ windowDays? })    // GET /v1/status/usage
+client.getAccessStatus({ windowDays? })   // GET /v1/admin/status/access
+client.collections.analytics(collection) // GET /v1/collections/{name}/analytics
+```
+
+## Error Handling
+
+```typescript
+import {
+  BigRAG,
+  AuthenticationError,
+  NotFoundError,
+  APIError,
+} from "@bigrag/client";
+
+try {
+  await client.collections.get("missing");
+} catch (err) {
+  if (err instanceof NotFoundError) {
+    // 404
+  } else if (err instanceof AuthenticationError) {
+    // 401
+  } else if (err instanceof APIError) {
+    // any other API error — check err.status
+  }
+}
+```
+
+### Error Hierarchy
+
+`BigRAGError` > `APIError` > specific errors:
+
+| Error Class | HTTP Status |
+|-------------|-------------|
+| `BadRequestError` | 400 |
+| `AuthenticationError` | 401 |
+| `NotFoundError` | 404 |
+| `RateLimitError` | 429 |
+| `InternalServerError` | 500 |
+| `APIConnectionError` | Network failure |
+| `APITimeoutError` | Request timeout |
+
+## Retry Behavior
+
+- **Retried:** HTTP 500+, HTTP 429 from proxy/infrastructure layers, connection errors, timeouts
+- **Not retried:** HTTP 400, 401, 403, 404
+- **Backoff:** `min(0.5 * 2^attempt, 4.0)` seconds
+- **Default retries:** 2 (configurable via `maxRetries`)

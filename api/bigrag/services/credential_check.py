@@ -1,0 +1,191 @@
+from __future__ import annotations
+
+from typing import Literal
+
+import httpx
+
+from bigrag.logging import get_logger
+from bigrag.services.url_security import (
+    UnsafeOutboundUrlError,
+    pin_chat_base_url,
+    pin_embedding_base_url,
+    pinned_async_client,
+)
+
+logger = get_logger("bigrag.services.credential_check")
+
+Provider = Literal["openai", "openai_compatible", "cohere", "voyage"]
+CredentialCheckPurpose = Literal["embedding", "chat"]
+
+_DEFAULT_BASE_URLS: dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "cohere": "https://api.cohere.ai/v1",
+    "voyage": "https://api.voyageai.com/v1",
+}
+
+
+class CredentialCheckError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+async def verify_provider_credentials(
+    provider: Provider,
+    api_key: str,
+    base_url: str | None,
+    *,
+    model: str | None = None,
+    timeout_seconds: float = 5.0,
+    url_purpose: CredentialCheckPurpose = "embedding",
+) -> None:
+
+    if provider == "openai_compatible" and not base_url:
+        raise CredentialCheckError(
+            "MISSING_BASE_URL",
+            "base_url is required for OpenAI-compatible providers.",
+        )
+    if provider == "voyage":
+        await _verify_voyage(api_key, base_url, model, timeout_seconds, url_purpose)
+        return
+    await _verify_via_models_listing(provider, api_key, base_url, timeout_seconds, url_purpose)
+
+
+async def _verify_via_models_listing(
+    provider: Provider,
+    api_key: str,
+    base_url: str | None,
+    timeout_seconds: float,
+    url_purpose: CredentialCheckPurpose,
+) -> None:
+    effective = base_url or _DEFAULT_BASE_URLS[provider]
+    try:
+        pinned = await _pin_base_url(effective, url_purpose)
+    except UnsafeOutboundUrlError as exc:
+        raise CredentialCheckError("UNSAFE_BASE_URL", str(exc)) from exc
+    url = f"{pinned.normalized_url.rstrip('/')}/models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        async with pinned_async_client(
+            pinned, timeout=timeout_seconds, follow_redirects=False
+        ) as client:
+            response = await client.get(url, headers=headers)
+    except httpx.TimeoutException:
+        logger.warning(
+            "credential_check timeout", extra={"provider": provider, "base_url": base_url}
+        )
+        raise CredentialCheckError(
+            "TIMEOUT", f"Provider did not respond within {timeout_seconds:.0f}s."
+        ) from None
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "credential_check unreachable",
+            extra={"provider": provider, "base_url": base_url, "error": type(exc).__name__},
+        )
+        raise CredentialCheckError("UNREACHABLE", "Could not reach provider.") from None
+
+    status = response.status_code
+    if 200 <= status < 300:
+        return
+
+    if status in (401, 403):
+        logger.info(
+            "credential_check rejected",
+            extra={"provider": provider, "base_url": base_url, "status": status},
+        )
+        raise CredentialCheckError("INVALID_KEY", "Invalid API key.")
+    if status == 404:
+        logger.info(
+            "credential_check endpoint missing",
+            extra={"provider": provider, "base_url": base_url},
+        )
+        raise CredentialCheckError("NOT_FOUND", "Provider endpoint did not recognize /models.")
+    logger.warning(
+        "credential_check provider error",
+        extra={"provider": provider, "base_url": base_url, "status": status},
+    )
+    raise CredentialCheckError("PROVIDER_ERROR", f"Provider returned {status}.")
+
+
+async def _verify_voyage(
+    api_key: str,
+    base_url: str | None,
+    model: str | None,
+    timeout_seconds: float,
+    url_purpose: CredentialCheckPurpose,
+) -> None:
+    effective = base_url or _DEFAULT_BASE_URLS["voyage"]
+    try:
+        pinned = await _pin_base_url(effective, url_purpose)
+    except UnsafeOutboundUrlError as exc:
+        raise CredentialCheckError("UNSAFE_BASE_URL", str(exc)) from exc
+    url = f"{pinned.normalized_url.rstrip('/')}/embeddings"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {"input": ["ping"], "model": model or "voyage-3.5"}
+
+    try:
+        async with pinned_async_client(
+            pinned, timeout=timeout_seconds, follow_redirects=False
+        ) as client:
+            response = await client.post(url, headers=headers, json=payload)
+    except httpx.TimeoutException:
+        logger.warning(
+            "credential_check timeout", extra={"provider": "voyage", "base_url": base_url}
+        )
+        raise CredentialCheckError(
+            "TIMEOUT", f"Provider did not respond within {timeout_seconds:.0f}s."
+        ) from None
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "credential_check unreachable",
+            extra={"provider": "voyage", "base_url": base_url, "error": type(exc).__name__},
+        )
+        raise CredentialCheckError("UNREACHABLE", "Could not reach provider.") from None
+
+    status = response.status_code
+    if 200 <= status < 300:
+        return
+
+    if status in (401, 403):
+        logger.info(
+            "credential_check rejected",
+            extra={"provider": "voyage", "base_url": base_url, "status": status},
+        )
+        raise CredentialCheckError("INVALID_KEY", "Invalid API key.")
+    detail = _voyage_error_detail(response)
+    detail = "".join(c for c in detail[:200] if c.isprintable())
+    logger.warning(
+        "credential_check provider error",
+        extra={"provider": "voyage", "base_url": base_url, "status": status},
+    )
+    raise CredentialCheckError(
+        "PROVIDER_ERROR", f"Voyage returned {status}{f': {detail}' if detail else '.'}"
+    )
+
+
+async def _pin_base_url(base_url: str, purpose: CredentialCheckPurpose):
+    if purpose == "chat":
+        return await pin_chat_base_url(base_url)
+    return await pin_embedding_base_url(base_url)
+
+
+def _voyage_error_detail(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if isinstance(body, dict):
+        for key in ("detail", "error", "message"):
+            value = body.get(key)
+            if isinstance(value, str) and value:
+                return value
+            if isinstance(value, dict):
+                msg = value.get("message")
+                if isinstance(msg, str) and msg:
+                    return msg
+    return ""

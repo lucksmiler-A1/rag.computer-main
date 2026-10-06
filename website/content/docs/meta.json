@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "index",
+    "getting-started",
+    "concepts",
+    "admin-ui",
+    "api-reference",
+    "sdks",
+    "cookbook",
+    "development",
+    "migration",
+    "deployment",
+    "comparison"
+  ]
+}

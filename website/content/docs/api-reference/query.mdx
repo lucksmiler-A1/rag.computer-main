@@ -1,0 +1,189 @@
+---
+title: Query & Search
+description: Turbopuffer-backed API endpoints for semantic, keyword, and hybrid search.
+---
+
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+All endpoints require [authentication](/docs/api-reference/authentication) — a session cookie or an API key with `query:read`. Queries run against Turbopuffer namespaces using semantic vectors, BM25 keyword search, or hybrid fusion depending on `search_mode`.
+
+## Search
+
+<Accordions type="multiple">
+<Accordion title="POST /v1/collections/{collection_name}/query — Single collection query">
+
+Run a search against one collection's Turbopuffer namespace. Semantic and hybrid modes embed the query with the collection's configured embedding model; keyword mode skips embedding.
+
+**Request body:**
+
+```json
+{
+  "query": "What are the main findings about climate change?",
+  "top_k": 10,
+  "filters": { "author": "Smith", "year": { "$gte": 2024 } },
+  "min_score": 0.5,
+  "search_mode": "hybrid",
+  "rerank": true,
+  "skip_cache": true,
+  "multimodal": true
+}
+```
+
+| Field | Type | Required | Default | Constraints |
+|-------|------|----------|---------|-------------|
+| `query` | string | yes | — | Natural language or keyword query |
+| `top_k` | integer | no | Collection default | 1–200 |
+| `filters` | object | no | — | Metadata filters — see [operators](/docs/concepts/search#filters) |
+| `min_score` | float | no | Collection default | Drop results below this score |
+| `search_mode` | string | no | Collection default | `semantic`, `keyword`, or `hybrid` |
+| `rerank` | boolean | no | Collection setting | Force Cohere reranking on/off for this query |
+| `skip_cache` | boolean | no | `false` | Bypass Redis query-result and query-embedding caches for this request |
+| `multimodal` | boolean | no | `false` | Request multimodal provenance when the collection has stored elements |
+
+**Response** `200`:
+
+```json
+{
+  "results": [
+    {
+      "id": "doc-abc-123#3",
+      "text": "The study found significant increases in global temperatures...",
+      "score": 0.892,
+      "document_id": "660e8400-e29b-41d4-a716-446655440000",
+      "document_filename": "paper.pdf",
+      "chunk_index": 3,
+      "page_no": 5,
+      "char_start": 1820,
+      "char_end": 2310,
+      "multimodal_elements": [
+        {
+          "document_id": "660e8400-e29b-41d4-a716-446655440000",
+          "element_index": 4,
+          "kind": "table",
+          "text": "| Metric | Value |",
+          "summary": null,
+          "caption": null,
+          "asset_path": null,
+          "page_no": 5,
+          "bbox": null,
+          "metadata": { "source": "docling" }
+        }
+      ],
+      "metadata": { "author": "Smith" }
+    }
+  ],
+  "query": "What are the main findings about climate change?",
+  "collection": "research_papers",
+  "total": 1,
+  "timings": {
+    "embed_ms": 18.2,
+    "search_ms": 12.4,
+    "rerank_ms": 31.5,
+    "cache_ms": 0,
+    "total_ms": 62.8,
+    "cache_hit": false
+  }
+}
+```
+
+**Response fields:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `results[]` | array | Hits ordered by final score |
+| `results[].id` | string | Chunk ID (`{document_id}#{chunk_index}`) |
+| `results[].text` | string | Chunk text |
+| `results[].score` | float | Similarity / fused score (0–1) |
+| `results[].document_id` | string | Source document UUID |
+| `results[].document_filename` | string? | Source filename resolved from the document table when available |
+| `results[].chunk_index` | integer | Position within the source document |
+| `results[].page_no` | integer? | Source page number when Docling surfaced one (PDF, DOCX, PPTX). `null` for plain-text formats. |
+| `results[].char_start` | integer? | Inclusive character offset of the chunk inside the source document. |
+| `results[].char_end` | integer? | Exclusive character offset of the chunk inside the source document. |
+| `results[].multimodal_elements` | array | Overlapping element refs for multimodal collections, including kind, text/summary, caption, page, and bbox. `asset_path` is retained in the schema for compatibility but is `null` for new ingestions |
+| `results[].metadata` | object | Chunk + document metadata merged |
+| `timings` | object | Per-stage latency in milliseconds, plus `cache_hit` for reused query-result cache entries |
+
+**Errors:** `404` — collection not found.
+
+</Accordion>
+
+<Accordion title="POST /v1/query — Multi-collection query">
+
+Search across multiple collections and merge the results by score.
+
+```json
+{
+  "query": "machine learning",
+  "collections": ["docs", "papers"],
+  "top_k": 20,
+  "search_mode": "hybrid",
+  "rerank": true,
+  "skip_cache": true
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | yes | Search query |
+| `collections` | string[] | yes | Collection names to search |
+| `top_k` | integer | no | Max results per collection, 1–200 |
+| `filters` | object | no | Metadata filters |
+| `min_score` | float | no | Minimum score |
+| `search_mode` | string | no | `semantic`, `keyword`, `hybrid` |
+| `rerank` | boolean | no | Override per-collection reranking |
+| `skip_cache` | boolean | no | Bypass Redis query caches for this request |
+
+Each result includes a `collection` field.
+
+```bash
+curl -X POST http://localhost:4000/v1/query \
+  -H "Authorization: Bearer $BIGRAG_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"machine learning","collections":["docs","papers"],"top_k":20}'
+```
+
+</Accordion>
+
+<Accordion title="POST /v1/batch/query — Batch query">
+
+Run up to 20 independent queries in parallel. Each query item accepts the full single-collection body, including `skip_cache`.
+
+```json
+{
+  "queries": [
+    {"collection": "docs", "query": "authentication", "top_k": 5},
+    {"collection": "papers", "query": "neural networks", "top_k": 10,
+     "search_mode": "hybrid", "filters": {"year": {"$gte": 2024}}}
+  ]
+}
+```
+
+Response: `{"results": [...]}` — an array of query responses in the same order as the input.
+
+</Accordion>
+</Accordions>
+
+## Analytics
+
+<Accordions type="multiple">
+<Accordion title="GET /v1/collections/{name}/analytics — Collection analytics">
+
+Rolling 24-hour, 7-day, and 30-day query statistics, cached for five minutes.
+
+**Response** `200`:
+
+```json
+{
+  "collection": "docs",
+  "period_24h": { "query_count": 142, "avg_latency_ms": 45.2, "avg_score": 0.82, "avg_result_count": 8.3 },
+  "period_7d":  { "query_count": 1203, "avg_latency_ms": 48.1, "avg_score": 0.79, "avg_result_count": 7.9 },
+  "period_30d": { "query_count": 4521, "avg_latency_ms": 46.7, "avg_score": 0.80, "avg_result_count": 8.1 },
+  "top_queries": [
+    { "query": "authentication flow", "count": 23 }
+  ]
+}
+```
+
+</Accordion>
+</Accordions>

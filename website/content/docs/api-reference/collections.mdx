@@ -1,0 +1,208 @@
+---
+title: Collections
+description: API endpoints for managing collections.
+---
+
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+Base path: `/v1/collections`
+
+All endpoints require [authentication](/docs/api-reference/authentication) — a session cookie or an API key with `collection:read` (reads), `collection:write` (create / update), or `collection:delete` (delete / truncate).
+
+## CRUD
+
+<Accordions type="multiple">
+<Accordion title="GET /v1/collections — List collections">
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | string | — | Filter by name prefix (case-insensitive) |
+| `limit` | integer | `100` | Results per page (1–1,000) |
+| `offset` | integer | `0` | Pagination offset |
+
+**Response** `200`:
+
+```json
+{
+  "collections": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "research_papers",
+      "description": "Academic research papers",
+      "embedding_provider": "openai",
+      "embedding_model": "text-embedding-3-small",
+      "dimension": 1536,
+      "chunk_size": 512,
+      "chunk_overlap": 50,
+      "chunk_strategy": "paragraph",
+      "tenant_field": null,
+      "has_metadata_schema": false,
+      "document_count": 15,
+      "has_api_key": false,
+      "embedding_preset_id": null,
+      "reranking_enabled": false,
+      "reranking_model": "rerank-v3.5",
+      "has_reranking_api_key": false,
+      "multimodal_enabled": false,
+      "multimodal_enrichment_enabled": false,
+      "default_top_k": 10,
+      "default_min_score": null,
+      "default_search_mode": "semantic",
+      "metadata": {},
+      "created_at": "2026-04-01T00:00:00Z",
+      "updated_at": "2026-04-01T12:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+</Accordion>
+
+<Accordion title="POST /v1/collections — Create collection">
+
+**Request body:**
+
+```json
+{
+  "name": "research_papers",
+  "description": "Academic research papers",
+  "embedding_provider": "openai",
+  "embedding_model": "text-embedding-3-small",
+  "dimension": 1536,
+  "chunk_size": 512,
+  "chunk_overlap": 50,
+  "chunk_strategy": "paragraph",
+  "tenant_field": "tenant_id",
+  "metadata_schema": {
+    "type": "object",
+    "properties": { "tenant_id": { "type": "string" } },
+    "required": ["tenant_id"]
+  },
+  "reranking_enabled": true,
+  "multimodal_enabled": true,
+  "multimodal_enrichment_enabled": false,
+  "default_top_k": 10,
+  "default_min_score": 0.3,
+  "default_search_mode": "hybrid",
+  "metadata": { "team": "research" }
+}
+```
+
+| Field | Type | Required | Default | Constraints |
+|-------|------|----------|---------|-------------|
+| `name` | string | yes | — | 1–128 chars, `[a-zA-Z][a-zA-Z0-9_]*` |
+| `description` | string | no | `""` | — |
+| `embedding_provider` | string | no | Server default | `openai`, `cohere`, `voyage`, `openai_compatible` |
+| `embedding_model` | string | no | Server default | Model name |
+| `embedding_preset_id` | string | no | — | Link to a saved embedding preset; inherits provider, model, dimension, base URL, and key live |
+| `embedding_api_key` | string | no | — | Required when `embedding_preset_id` is not provided; validated against the provider before the collection is created. Use any non-empty value for local OpenAI-compatible gateways without auth. Ignored when a preset is supplied |
+| `embedding_base_url` | string | no | — | Required for `openai_compatible` (Ollama, vLLM, TEI, LiteLLM, Azure, Bedrock) |
+| `dimension` | integer | no | Provider default | Must match the model |
+| `chunk_size` | integer | no | `512` | 64–10,000 |
+| `chunk_overlap` | integer | no | `50` | 0–5,000, must be `< chunk_size` |
+| `chunk_strategy` | string | no | `"paragraph"` | `paragraph` (split on blank lines) or `recursive` (hierarchical) |
+| `tenant_field` | string | no | — | Metadata key used for tenant isolation on uploads, raw vector upserts, queries, chat, document listing, and document reads |
+| `metadata_schema` | object | no | — | JSON Schema validated on every upload / upsert |
+| `default_top_k` | integer | no | `10` | 1–200 |
+| `default_min_score` | float | no | `null` | Minimum similarity score |
+| `default_search_mode` | string | no | `"semantic"` | `semantic`, `keyword`, `hybrid` |
+| `reranking_enabled` | boolean | no | `false` | Re-rank results with Cohere cross-encoder |
+| `reranking_model` | string | no | `"rerank-v3.5"` | Cohere reranking model |
+| `reranking_api_key` | string | no | — | Cohere API key |
+| `multimodal_enabled` | boolean | no | `false` | Store first-class document elements and chunk provenance for future ingestions |
+| `multimodal_enrichment_enabled` | boolean | no | `false` | Queue LLM summaries for images, tables, and equations; requires `multimodal_enabled` |
+| `metadata` | object | no | `{}` | Arbitrary key-value pairs |
+
+**Response** `201`: Full collection object.
+
+**Errors:**
+
+- `400` — Invalid name, chunk config, or invalid dimension
+- `409` — Collection name already exists, or the Turbopuffer namespace already exists with a different vector dimension
+- `502` — Vector store rejected collection provisioning
+
+</Accordion>
+
+<Accordion title="GET /v1/collections/{name} — Get collection">
+
+**Response** `200`: Full collection object. **Errors:** `404`.
+
+</Accordion>
+
+<Accordion title="PUT /v1/collections/{name} — Update collection">
+
+Only the fields below are mutable. Embedding provider / model / dimension, chunk size / overlap, and `tenant_field` are fixed at creation.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `description` | string | — |
+| `metadata` | object | Replaces entire metadata object |
+| `metadata_schema` | object | Updates JSON Schema validation |
+| `chunk_strategy` | string | `paragraph` or `recursive` |
+| `embedding_api_key` | string | Validated against the provider before saving; empty values are rejected. Saving a key here switches the collection to a per-collection override and detaches it from any preset |
+| `reranking_enabled` | boolean | — |
+| `reranking_model` | string | — |
+| `reranking_api_key` | string | — |
+| `multimodal_enabled` | boolean | Disabling it also disables enrichment for future ingestions |
+| `multimodal_enrichment_enabled` | boolean | Enabling it also enables `multimodal_enabled` |
+| `default_top_k` | integer | 1–200 |
+| `default_min_score` | float | — |
+| `default_search_mode` | string | `semantic`, `keyword`, `hybrid` |
+
+**Response** `200`: Updated collection object. **Errors:** `404`, `422` (when `embedding_api_key` is empty or rejected by the provider).
+
+</Accordion>
+
+<Accordion title="DELETE /v1/collections/{name} — Delete collection">
+
+Deletes the collection, every document, every vector, and any remaining staged ingestion file.
+
+**Response** `200`:
+
+```json
+{ "status": "ok", "message": "Collection 'research_papers' deleted" }
+```
+
+**Errors:** `404`.
+
+</Accordion>
+</Accordions>
+
+## Stats & operations
+
+<Accordions type="multiple">
+<Accordion title="GET /v1/collections/{name}/stats — Collection stats">
+
+Lightweight endpoint returning document and chunk counts.
+
+**Response** `200`:
+
+```json
+{
+  "collection": "research_papers",
+  "document_count": 15,
+  "total_chunks": 482,
+  "total_tokens": 125000,
+  "total_size_bytes": 52428800,
+  "status_counts": { "ready": 12, "pending": 2, "processing": 1, "failed": 0 }
+}
+```
+
+</Accordion>
+
+<Accordion title="POST /v1/collections/{name}/truncate — Truncate collection">
+
+Deletes every document, vector, and remaining staged ingestion file in the collection but keeps the collection configuration.
+
+**Response** `200`:
+
+```json
+{ "status": "ok", "message": "Collection 'research_papers' truncated" }
+```
+
+**Errors:** `404`.
+
+</Accordion>
+
+</Accordions>

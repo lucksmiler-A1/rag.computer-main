@@ -1,0 +1,88 @@
+# @bigrag/client
+
+TypeScript client for [bigRAG](https://github.com/bigint/rag.computer) — a self-hostable RAG platform.
+
+Works in Node.js 18+, browsers, Deno, Bun, and edge runtimes.
+
+## Installation
+
+```bash
+npm install @bigrag/client
+```
+
+Published releases use CalVer in the form `YYYY.M.D`.
+
+## Quick Start
+
+```typescript
+import { BigRAG } from "@bigrag/client";
+
+const client = new BigRAG({
+  apiKey: "your-api-key",
+  baseUrl: "http://localhost:4000",
+});
+
+// List collections
+const { collections } = await client.collections.list();
+
+// Upload a document
+const doc = await client.documents.upload("my_collection", file);
+
+// Query
+const results = await client.queries.query("my_collection", {
+  query: "What is RAG?",
+  top_k: 5,
+});
+
+// Poll document processing status
+let current = doc;
+while (current.status === "pending" || current.status === "processing") {
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  current = await client.documents.get("my_collection", doc.id);
+  console.log(current.progress?.message ?? current.status);
+}
+```
+
+## Configuration
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `apiKey` | `BIGRAG_API_KEY` env var | API key or session token |
+| `baseUrl` | `http://localhost:4000` | bigRAG server URL |
+| `timeout` | `120000` | Request timeout in milliseconds |
+| `maxRetries` | `2` | Max retries on 5xx, infrastructure 429 responses, and network errors |
+| `fetch` | `globalThis.fetch` | Custom fetch implementation |
+
+## Namespaces
+
+- `client.collections` for collection CRUD, stats, and analytics.
+- `client.documents` for uploads, batch operations, chunks, elements, and status polling.
+- `client.queries` for single, multi-collection, and batch retrieval queries.
+- `client.chat` for generated answers, question suggestions, and streaming.
+- `client.vectors` for raw vector upsert and delete.
+- `client.webhooks` for webhook management and delivery replay.
+- `client.auth` for setup, login, identity, password, and preferences.
+- `client.admin` for users, API keys, access logs, audit logs, runtime settings, vector storage overview, connectors, embedding presets, and MCP server keys.
+- Top-level status helpers (`getOverviewStatus`, `getCollectionsStatus`, `getUsageStatus`, `getAccessStatus`) for pollable admin UI aggregates.
+- `client.connectors.s3` for S3-compatible bucket-prefix sources and sync jobs.
+- `client.evaluations` for golden-set retrieval evaluations.
+
+## Error Handling
+
+```typescript
+import { BigRAG, AuthenticationError, NotFoundError } from "@bigrag/client";
+
+try {
+  await client.collections.get("missing");
+} catch (err) {
+  if (err instanceof NotFoundError) {
+    console.log("Collection not found");
+  } else if (err instanceof AuthenticationError) {
+    console.log("Invalid credentials");
+  }
+}
+```
+
+## License
+
+MIT
